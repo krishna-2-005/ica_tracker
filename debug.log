@@ -1,0 +1,2 @@
+[2025-07-24 18:14:33] Executing query: SELECT id, class_name, description, department FROM classes
+[2025-07-24 18:20:19] Executing query: SELECT id, class_name, description, department FROM classes

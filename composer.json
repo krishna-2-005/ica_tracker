@@ -1,0 +1,7 @@
+{
+    "name": "ica-tracker/app",
+    "description": "ICA Tracker web application supporting SMTP email notifications.",
+    "require": {
+        "phpmailer/phpmailer": "^6.8"
+    }
+}
