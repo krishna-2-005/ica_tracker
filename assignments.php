@@ -1,6 +1,6 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'teacher') {
     header('Location: login.php');
     exit;
@@ -8,6 +8,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'teacher') {
 
 require_once __DIR__ . '/includes/assignment_helpers.php';
 require_once __DIR__ . '/includes/academic_context.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 
 ensure_assignment_schema($conn);
 $storagePaths = ensure_assignment_storage();
@@ -174,6 +175,17 @@ function format_datetime_local(?string $value): string {
         return '';
     }
     return $dt->format('Y-m-d\TH:i');
+}
+
+function format_email_datetime(?string $value): string {
+    if ($value === null || $value === '') {
+        return '';
+    }
+    $dt = date_create($value);
+    if (!$dt) {
+        return $value;
+    }
+    return $dt->format('d M Y, h:i A');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -371,6 +383,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'student_ids' => []
                         ];
                         $selectedAssignmentId = $assignmentId;
+
+                        $studentDirectory = email_notification_fetch_students($conn, $studentIds);
+                        if (!empty($studentDirectory)) {
+                            $assignmentLink = email_notification_app_url() . '/student_dashboard.php?assignment_id=' . $assignmentId;
+                            $formattedStart = format_email_datetime($startAt);
+                            $formattedDue = format_email_datetime($dueAt);
+                            $facultyDisplay = $teacherNameDisplay !== '' ? $teacherNameDisplay : $teacherName;
+                            foreach ($studentDirectory as $studentInfo) {
+                                $email = $studentInfo['email'] ?? '';
+                                if ($email === '') {
+                                    continue;
+                                }
+
+                                $studentName = $studentInfo['name'] !== '' ? $studentInfo['name'] : ($studentInfo['sap_id'] ?? 'Student');
+
+                                send_notification_email($email, EMAIL_SCENARIO_ASSIGNMENT_CREATED, [
+                                    'recipient_name' => $studentName,
+                                    'subject_name' => $subjectName,
+                                    'assignment_title' => $title,
+                                    'assignment_description' => $description,
+                                    'faculty_name' => $facultyDisplay,
+                                    'start_at' => $formattedStart,
+                                    'due_at' => $formattedDue,
+                                    'assignment_url' => $assignmentLink,
+                                ]);
+                            }
+                        }
                     } catch (Throwable $ex) {
                         mysqli_rollback($conn);
                         $formErrors[] = $ex->getMessage();

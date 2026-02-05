@@ -1,6 +1,7 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'program_chair') {
     header('Location: login.php');
     exit;
@@ -16,6 +17,10 @@ if (isset($_SESSION['alert_feedback'])) {
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['send_alert'])) {
     $recipient = trim($_POST['teacher_id'] ?? '');
     $message = trim($_POST['message'] ?? '');
+    $alertTitle = trim((string)($_POST['alert_title'] ?? 'Program Alert'));
+    if ($alertTitle === '') {
+        $alertTitle = 'Program Alert';
+    }
 
     if ($recipient === '' || $message === '') {
         $_SESSION['alert_feedback'] = 'Please pick a teacher (or All Teachers) and enter a message.';
@@ -35,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['send_alert'])) {
     mysqli_stmt_bind_param($insert_stmt, "is", $teacher_id_param, $message_param);
 
     $insert_count = 0;
+    $notifiedTeacherIds = [];
 
     if ($recipient === 'all') {
         $teachers_stmt = mysqli_prepare($conn, "SELECT id FROM users WHERE role = 'teacher'");
@@ -45,6 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['send_alert'])) {
                 $teacher_id_param = (int)$teacher_row['id'];
                 if (mysqli_stmt_execute($insert_stmt)) {
                     $insert_count++;
+                    $notifiedTeacherIds[] = $teacher_id_param;
                 }
             }
             mysqli_free_result($teachers_result);
@@ -54,10 +61,36 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['send_alert'])) {
         $teacher_id_param = (int)$recipient;
         if (mysqli_stmt_execute($insert_stmt)) {
             $insert_count = 1;
+            $notifiedTeacherIds[] = $teacher_id_param;
         }
     }
 
     mysqli_stmt_close($insert_stmt);
+
+    if (!empty($notifiedTeacherIds)) {
+        $teacherContacts = email_notification_fetch_users($conn, $notifiedTeacherIds);
+        $senderId = (int)$_SESSION['user_id'];
+        $senderDirectory = email_notification_fetch_users($conn, [$senderId]);
+        $senderInfo = $senderDirectory[$senderId] ?? null;
+        $senderName = $senderInfo && $senderInfo['name'] !== '' ? $senderInfo['name'] : 'Program Chair';
+        $alertsUrl = email_notification_app_url() . '/view_alerts.php';
+
+        foreach ($teacherContacts as $teacherInfo) {
+            $email = $teacherInfo['email'] ?? '';
+            if ($email === '') {
+                continue;
+            }
+            $recipientName = $teacherInfo['name'] !== '' ? $teacherInfo['name'] : 'Faculty Member';
+            send_notification_email($email, EMAIL_SCENARIO_PROGRAM_ALERT, [
+                'recipient_name' => $recipientName,
+                'alert_title' => $alertTitle,
+                'alert_message' => $message,
+                'sender_name' => $senderName,
+                'sender_type' => 'Program Chair',
+                'alerts_url' => $alertsUrl,
+            ]);
+        }
+    }
 
     if ($insert_count > 0) {
         $_SESSION['alert_feedback'] = $insert_count === 1

@@ -1,7 +1,8 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 require_once __DIR__ . '/includes/term_switcher_ui.php';
 require_once __DIR__ . '/includes/activity_logger.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin') {
@@ -215,6 +216,48 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         ],
                         'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
                         'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+                    ]);
+                }
+
+                $teacherContacts = email_notification_fetch_users($conn, [$teacher_id]);
+                $teacherInfo = $teacherContacts[$teacher_id] ?? null;
+                if ($teacherInfo && isset($teacherInfo['email']) && $teacherInfo['email'] !== '') {
+                    $classLabel = email_notification_format_class_section($conn, $class_id, $section_id);
+                    $studentCount = 0;
+                    $countSql = 'SELECT COUNT(*) AS total FROM students WHERE class_id = ?';
+                    if ($section_id > 0) {
+                        $countSql .= ' AND COALESCE(section_id, 0) = ?';
+                    }
+                    $countStmt = mysqli_prepare($conn, $countSql);
+                    if ($countStmt) {
+                        if ($section_id > 0) {
+                            mysqli_stmt_bind_param($countStmt, 'ii', $class_id, $section_id);
+                        } else {
+                            mysqli_stmt_bind_param($countStmt, 'i', $class_id);
+                        }
+                        mysqli_stmt_execute($countStmt);
+                        $countRes = mysqli_stmt_get_result($countStmt);
+                        if ($countRes && ($rowCount = mysqli_fetch_assoc($countRes))) {
+                            $studentCount = (int)($rowCount['total'] ?? 0);
+                            mysqli_free_result($countRes);
+                        }
+                        mysqli_stmt_close($countStmt);
+                    }
+
+                    $recipientName = $teacherInfo['name'] !== '' ? format_person_display($teacherInfo['name']) : 'Faculty Member';
+                    $roleLabel = $teacherInfo['role'] === 'program_chair' ? 'Program Chair' : 'Faculty';
+                    $academicYear = is_array($activeTerm) ? ($activeTerm['academic_year'] ?? '') : '';
+                    $semesterValue = $assignment_class_meta['semester'] ?? '';
+
+                    send_notification_email($teacherInfo['email'], EMAIL_SCENARIO_SUBJECT_ASSIGNMENT, [
+                        'recipient_name' => $recipientName,
+                        'subject_name' => $subject_details['subject_name'] ?? '',
+                        'academic_year' => $academicYear,
+                        'semester' => $semesterValue,
+                        'class_section' => $classLabel,
+                        'student_count' => $studentCount > 0 ? (string)$studentCount : '',
+                        'assigned_role' => $roleLabel,
+                        'subjects_url' => email_notification_app_url() . '/teacher_dashboard.php',
                     ]);
                 }
             }

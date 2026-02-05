@@ -1,7 +1,8 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'teacher') {
     header('Location: login.php');
     exit;
@@ -9,17 +10,23 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'teacher') {
 
 $teacher_id = (int)$_SESSION['user_id'];
 $teacherSchool = '';
-$stmtTeacherSchool = mysqli_prepare($conn, "SELECT school FROM users WHERE id = ?");
+$teacherNameRaw = '';
+$teacherNameDisplay = '';
+$stmtTeacherSchool = mysqli_prepare($conn, "SELECT school, name FROM users WHERE id = ?");
 if ($stmtTeacherSchool) {
     mysqli_stmt_bind_param($stmtTeacherSchool, "i", $teacher_id);
     mysqli_stmt_execute($stmtTeacherSchool);
     $resTeacherSchool = mysqli_stmt_get_result($stmtTeacherSchool);
     if ($resTeacherSchool && ($rowSchool = mysqli_fetch_assoc($resTeacherSchool))) {
         $teacherSchool = trim((string)($rowSchool['school'] ?? ''));
+        $teacherNameRaw = trim((string)($rowSchool['name'] ?? ''));
+        $teacherNameDisplay = $teacherNameRaw !== '' ? format_person_display($teacherNameRaw) : '';
         mysqli_free_result($resTeacherSchool);
     }
     mysqli_stmt_close($stmtTeacherSchool);
 }
+
+$teacherNameForEmails = $teacherNameDisplay !== '' ? $teacherNameDisplay : ($teacherNameRaw !== '' ? $teacherNameRaw : 'Faculty');
 
 $academicContext = resolveAcademicContext($conn, [
     'school_name' => $teacherSchool
@@ -272,6 +279,115 @@ function format_component_mark_value(?float $value): string {
     }
 
     return number_format($rounded, 2, '.', '');
+}
+
+function format_mark_display_for_email($raw): string {
+    if ($raw === null) {
+        return 'Not recorded';
+    }
+
+    if (is_string($raw)) {
+        $trimmed = trim($raw);
+        if ($trimmed === '') {
+            return 'Not recorded';
+        }
+        $upper = strtoupper($trimmed);
+        if (in_array($upper, ['AB', 'ABSENT', 'A'], true)) {
+            return 'Absent';
+        }
+        if (is_numeric($trimmed)) {
+            $numeric = (float)$trimmed;
+            if (abs($numeric - round($numeric)) < 0.01) {
+                return (string)(int)round($numeric);
+            }
+            return number_format($numeric, 2, '.', '');
+        }
+        return $trimmed;
+    }
+
+    if (is_numeric($raw)) {
+        $numeric = (float)$raw;
+        if (abs($numeric - round($numeric)) < 0.01) {
+            return (string)(int)round($numeric);
+        }
+        return number_format($numeric, 2, '.', '');
+    }
+
+    return 'Not recorded';
+}
+
+function send_marks_published_notifications(mysqli $conn, array $notifications, array $componentContexts, string $teacherNameDisplay): void {
+    if (empty($notifications)) {
+        return;
+    }
+
+    $studentIds = [];
+    $subjectIds = [];
+    foreach ($notifications as $componentId => $instances) {
+        if (!isset($componentContexts[$componentId]['component'])) {
+            continue;
+        }
+        $componentMeta = $componentContexts[$componentId]['component'];
+        $subjectIds[] = $componentMeta['subject_id'] ?? 0;
+        foreach ($instances as $studentsMarks) {
+            foreach ($studentsMarks as $studentId => $_) {
+                $studentIds[$studentId] = true;
+            }
+        }
+    }
+
+    if (empty($studentIds)) {
+        return;
+    }
+
+    $students = email_notification_fetch_students($conn, array_keys($studentIds));
+    $subjectNames = email_notification_fetch_subject_names($conn, $subjectIds);
+    $marksUrl = email_notification_app_url() . '/view_marks.php';
+    $facultyDisplay = $teacherNameDisplay !== '' ? $teacherNameDisplay : 'Faculty';
+
+    foreach ($notifications as $componentId => $instances) {
+        if (!isset($componentContexts[$componentId]['component'])) {
+            continue;
+        }
+        $componentMeta = $componentContexts[$componentId]['component'];
+        $componentName = trim((string)($componentMeta['component_name'] ?? 'ICA Component'));
+        $subjectId = isset($componentMeta['subject_id']) ? (int)$componentMeta['subject_id'] : 0;
+        $subjectName = $subjectNames[$subjectId] ?? 'Subject';
+        $instancesCount = isset($componentMeta['instances']) ? (int)$componentMeta['instances'] : 1;
+        $maxPerInstance = isset($componentMeta['marks_per_instance']) ? (float)$componentMeta['marks_per_instance'] : null;
+        $maxDisplay = $maxPerInstance !== null ? format_component_mark_value($maxPerInstance) : '';
+
+        foreach ($instances as $instanceNumber => $studentsMarks) {
+            $componentLabel = $componentName;
+            if ($instancesCount > 1) {
+                $componentLabel .= ' - Instance ' . (int)$instanceNumber;
+            }
+
+            foreach ($studentsMarks as $studentId => $markInfo) {
+                $studentInfo = $students[$studentId] ?? null;
+                if (!$studentInfo) {
+                    continue;
+                }
+                $email = $studentInfo['email'] ?? '';
+                if ($email === '') {
+                    continue;
+                }
+
+                $recipientName = $studentInfo['name'] !== '' ? $studentInfo['name'] : ($studentInfo['sap_id'] ?? 'Student');
+                $displayScore = $markInfo['display'] ?? 'Not recorded';
+
+                send_notification_email($email, EMAIL_SCENARIO_ICA_MARKS_PUBLISHED, [
+                    'recipient_name' => $recipientName,
+                    'subject_name' => $subjectName,
+                    'component_name' => $componentLabel,
+                    'marks_obtained' => $displayScore,
+                    'max_marks' => $maxDisplay,
+                    'faculty_name' => $facultyDisplay,
+                    'marks_url' => $marksUrl,
+                ]);
+            }
+        }
+    }
 }
 
 function format_excel_numeric_literal(float $value, int $precision = 10): string {
@@ -1087,6 +1203,7 @@ if (isset($_POST['upload_csv'])) {
 
     $rows_attempted = 0;
     $rows_saved = 0;
+    $notifications = [];
 
     foreach ($component_order as $component_id) {
         $meta = $component_contexts[$component_id];
@@ -1109,6 +1226,10 @@ if (isset($_POST['upload_csv'])) {
                     $marks_value = (float)$raw;
                 }
 
+                $notifications[$component_id][$instance_number][$student_id] = [
+                    'display' => format_mark_display_for_email($raw),
+                ];
+
                 if (upsert_student_mark($conn, $teacher_id, $student_id, $component_id, $instance_number, $marks_value)) {
                     $rows_saved++;
                 }
@@ -1125,6 +1246,7 @@ if (isset($_POST['upload_csv'])) {
             $labels[] = $component['component_name'] . ($instances > 1 ? ' (all instances)' : '');
         }
         $_SESSION['success_message'] = "Marks uploaded successfully for: " . implode(', ', $labels) . '.';
+        send_marks_published_notifications($conn, $notifications, $component_contexts, $teacherNameForEmails);
     } else {
         $_SESSION['error_message'] = "Some marks could not be saved. Please try again.";
     }
@@ -1217,6 +1339,7 @@ if (isset($_POST['submit_marks'])) {
 
     $rows_attempted = count($students);
     $rows_saved = 0;
+    $notifications = [];
 
     foreach ($students as $student) {
         $student_id = $student['id'];
@@ -1233,6 +1356,10 @@ if (isset($_POST['submit_marks'])) {
             $marks_value = (float)$raw;
         }
 
+        $notifications[$component_id][$instance_number][$student_id] = [
+            'display' => format_mark_display_for_email($raw),
+        ];
+
         if (upsert_student_mark($conn, $teacher_id, $student_id, $component_id, $instance_number, $marks_value)) {
             $rows_saved++;
         }
@@ -1241,6 +1368,7 @@ if (isset($_POST['submit_marks'])) {
     if ($rows_saved === $rows_attempted) {
         $instance_label = ($component['instances'] > 1) ? $component['component_name'] . " (Instance " . $instance_number . ")" : $component['component_name'];
         $_SESSION['success_message'] = "Marks for '" . $instance_label . "' have been submitted successfully!";
+        send_marks_published_notifications($conn, $notifications, [$component_id => $context], $teacherNameForEmails);
     } else {
         $_SESSION['error_message'] = "Some marks could not be saved. Please try again.";
     }

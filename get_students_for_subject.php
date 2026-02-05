@@ -1,6 +1,6 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
 
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'teacher' || !isset($_GET['subject_id'])) {

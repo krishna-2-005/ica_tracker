@@ -1,7 +1,11 @@
 <?php
+require_once __DIR__ . '/includes/init.php';
+
 // Set header to JSON early to ensure JSON is always returned, even on error.
 header('Content-Type: application/json');
-include 'db_connect.php';
+
+require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/assignment_helpers.php';
 
 if (!isset($_GET['school'])) {
     echo json_encode(['error' => 'No school specified']);

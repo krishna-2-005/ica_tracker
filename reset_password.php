@@ -1,6 +1,6 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/activity_logger.php';
 
 $msg = '';

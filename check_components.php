@@ -1,6 +1,6 @@
 <?php
-include 'db_connect.php';
-session_start();
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 $subject_id = (int)$_GET['subject_id'];
 $class_id = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
 $teacher_id = (int)$_SESSION['user_id'];

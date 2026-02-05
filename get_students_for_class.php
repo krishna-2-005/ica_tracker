@@ -1,6 +1,9 @@
 <?php
+require_once __DIR__ . '/includes/init.php';
+
 header('Content-Type: application/json');
-include 'db_connect.php';
+
+require_once __DIR__ . '/db_connect.php';
 
 $class_id = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
 $section_id = isset($_GET['section_id']) ? (int)$_GET['section_id'] : 0;

@@ -2,12 +2,16 @@
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
+if (!defined('APP_BOOTSTRAPPED')) {
+    require_once __DIR__ . '/init.php';
+}
+
 if (!function_exists('send_app_mail')) {
     function send_app_mail($to, string $subject, string $htmlBody, string $altBody = ''): bool
     {
-        $vendorAutoload = __DIR__ . '/../vendor/autoload.php';
-        if (!file_exists($vendorAutoload)) {
-            throw new RuntimeException('Composer autoload not found. Run "composer install" in the project root to install dependencies.');
+        $vendorAutoload = base_path('vendor/autoload.php');
+        if (!is_file($vendorAutoload)) {
+            throw new RuntimeException('Composer autoload not found. Run composer install in the project root to install dependencies.');
         }
 
         static $autoloaded = false;
@@ -16,24 +20,38 @@ if (!function_exists('send_app_mail')) {
             $autoloaded = true;
         }
 
-        $configFile = __DIR__ . '/../smtp_config.php';
-        if (!file_exists($configFile)) {
-            throw new RuntimeException('SMTP configuration file not found. Please copy smtp_config.php and update your credentials.');
-        }
-        $config = include $configFile;
+        $config = config('mail', []);
+
         if (empty($config['enabled'])) {
             return false;
+        }
+
+        $legacyConfigFile = base_path('smtp_config.php');
+        if (is_file($legacyConfigFile)) {
+            $legacyConfig = include $legacyConfigFile;
+            if (is_array($legacyConfig)) {
+                $config = array_replace($legacyConfig, array_filter($config, static function ($value) {
+                    return $value !== null && $value !== '';
+                }));
+            }
+        }
+
+        $host = $config['host'] ?? '';
+        if ($host === '') {
+            throw new RuntimeException('Mail host is not configured. Set MAIL_HOST in your environment.');
         }
 
         $mail = new PHPMailer(true);
         try {
             $mail->isSMTP();
-            $mail->Host = $config['host'];
-            $mail->Port = $config['port'] ?? 587;
-            $mail->SMTPAuth = !empty($config['username']);
-            if (!empty($config['username'])) {
-                $mail->Username = $config['username'];
-                $mail->Password = $config['password'] ?? '';
+            $mail->Host = $host;
+            $mail->Port = (int)($config['port'] ?? 587);
+            $username = $config['username'] ?? '';
+            $password = $config['password'] ?? '';
+            $mail->SMTPAuth = $username !== '';
+            if ($mail->SMTPAuth) {
+                $mail->Username = $username;
+                $mail->Password = $password;
             }
 
             $encryption = strtolower((string)($config['encryption'] ?? 'tls'));
@@ -64,12 +82,14 @@ if (!function_exists('send_app_mail')) {
             $mail->isHTML(true);
             $mail->Subject = $subject;
             $mail->Body = $htmlBody;
-            $mail->AltBody = $altBody ?: strip_tags($htmlBody);
+            $mail->AltBody = $altBody !== '' ? $altBody : strip_tags($htmlBody);
 
             $mail->send();
             return true;
-        } catch (Exception $e) {
-            error_log('Email sending failed: ' . $e->getMessage());
+        } catch (Exception $exception) {
+            app_log('Email sending failed.', [
+                'error' => $exception->getMessage(),
+            ]);
             return false;
         }
     }

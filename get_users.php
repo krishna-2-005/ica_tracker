@@ -1,5 +1,6 @@
 <?php
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 
 // Ensure a school is provided in the request
 if (!isset($_GET['school'])) {

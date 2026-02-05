@@ -1,6 +1,6 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['admin', 'program_chair'], true)) {
     header('Location: login.php');
     exit;

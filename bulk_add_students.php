@@ -1,6 +1,7 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     header('Location: login.php');
     exit;
@@ -58,6 +59,140 @@ function generate_timetable_week_options(int $maxWeeks = 20): array
         $options[$value] = 'Week ' . $i;
     }
     return $options;
+}
+
+function send_timetable_notifications(mysqli $conn, array $classIds, string $fileName, string $filePath, string $timelineLabel = ''): void
+{
+    $normalizedIds = [];
+    foreach ($classIds as $id) {
+        $id = (int)$id;
+        if ($id > 0) {
+            $normalizedIds[$id] = true;
+        }
+    }
+
+    if (empty($normalizedIds)) {
+        return;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($normalizedIds), '?'));
+    $classStmt = mysqli_prepare($conn, "SELECT id, class_name, semester, school, academic_term_id FROM classes WHERE id IN ($placeholders)");
+    if (!$classStmt) {
+        return;
+    }
+    $types = str_repeat('i', count($normalizedIds));
+    mysqli_stmt_bind_param($classStmt, $types, ...array_keys($normalizedIds));
+    mysqli_stmt_execute($classStmt);
+    $classResult = mysqli_stmt_get_result($classStmt);
+    $classInfo = [];
+    $termIds = [];
+    if ($classResult) {
+        while ($row = mysqli_fetch_assoc($classResult)) {
+            $classId = (int)$row['id'];
+            $classInfo[$classId] = $row;
+            $termId = isset($row['academic_term_id']) ? (int)$row['academic_term_id'] : 0;
+            if ($termId > 0) {
+                $termIds[$termId] = true;
+            }
+        }
+        mysqli_free_result($classResult);
+    }
+    mysqli_stmt_close($classStmt);
+
+    if (empty($classInfo)) {
+        return;
+    }
+
+    $termAcademicYears = [];
+    if (!empty($termIds)) {
+        $termPlaceholders = implode(',', array_fill(0, count($termIds), '?'));
+        $termStmt = mysqli_prepare($conn, "SELECT id, academic_year FROM academic_calendar WHERE id IN ($termPlaceholders)");
+        if ($termStmt) {
+            $termTypes = str_repeat('i', count($termIds));
+            mysqli_stmt_bind_param($termStmt, $termTypes, ...array_keys($termIds));
+            mysqli_stmt_execute($termStmt);
+            $termResult = mysqli_stmt_get_result($termStmt);
+            if ($termResult) {
+                while ($row = mysqli_fetch_assoc($termResult)) {
+                    $termAcademicYears[(int)$row['id']] = trim((string)($row['academic_year'] ?? ''));
+                }
+                mysqli_free_result($termResult);
+            }
+            mysqli_stmt_close($termStmt);
+        }
+    }
+
+    $studentStmt = mysqli_prepare($conn, "SELECT id, class_id, name, college_email, sap_id FROM students WHERE class_id IN ($placeholders)");
+    if (!$studentStmt) {
+        return;
+    }
+    mysqli_stmt_bind_param($studentStmt, $types, ...array_keys($normalizedIds));
+    mysqli_stmt_execute($studentStmt);
+    $studentResult = mysqli_stmt_get_result($studentStmt);
+    $studentsByClass = [];
+    if ($studentResult) {
+        while ($row = mysqli_fetch_assoc($studentResult)) {
+            $classId = isset($row['class_id']) ? (int)$row['class_id'] : 0;
+            if ($classId <= 0) {
+                continue;
+            }
+            if (!isset($studentsByClass[$classId])) {
+                $studentsByClass[$classId] = [];
+            }
+            $studentsByClass[$classId][] = $row;
+        }
+        mysqli_free_result($studentResult);
+    }
+    mysqli_stmt_close($studentStmt);
+
+    if (empty($studentsByClass)) {
+        return;
+    }
+
+    $baseUrl = rtrim(email_notification_app_url(), '/');
+    $relativePath = ltrim($filePath, '/');
+    $timetableUrl = $baseUrl . '/' . $relativePath;
+    $label = $timelineLabel !== '' ? $timelineLabel : $fileName;
+
+    foreach ($classInfo as $classId => $meta) {
+        $students = $studentsByClass[$classId] ?? [];
+        if (empty($students)) {
+            continue;
+        }
+
+        $academicYear = '';
+        $termId = isset($meta['academic_term_id']) ? (int)$meta['academic_term_id'] : 0;
+        if ($termId > 0 && isset($termAcademicYears[$termId])) {
+            $academicYear = $termAcademicYears[$termId];
+        }
+
+        $className = $meta['class_name'] ?? '';
+        $semester = $meta['semester'] ?? '';
+        $school = $meta['school'] ?? '';
+        $classLabel = format_class_label($className, '', $semester, $school);
+        $studentCount = count($students);
+
+        foreach ($students as $student) {
+            $email = trim((string)($student['college_email'] ?? ''));
+            if ($email === '') {
+                continue;
+            }
+            $recipientName = trim((string)($student['name'] ?? ''));
+            if ($recipientName === '') {
+                $recipientName = $student['sap_id'] ?? 'Student';
+            }
+
+            send_notification_email($email, EMAIL_SCENARIO_TIMETABLE_PUBLISHED, [
+                'recipient_name' => $recipientName,
+                'academic_year' => $academicYear,
+                'semester' => $semester,
+                'class_section' => $classLabel,
+                'timetable_url' => $timetableUrl,
+                'timetable_label' => $label,
+                'student_count' => $studentCount > 0 ? (string)$studentCount : '',
+            ]);
+        }
+    }
 }
 
 $timeline_options = generate_timetable_week_options(20);
@@ -722,6 +857,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetab
                                 count($class_meta_map)
                             );
 
+                            $broadcastClassIds = [];
+                            foreach ($class_meta_map as $class_meta) {
+                                if (isset($class_meta['id'])) {
+                                    $broadcastClassIds[] = (int)$class_meta['id'];
+                                }
+                            }
+                            send_timetable_notifications($conn, $broadcastClassIds, $safe_display_name, $relative_path, format_timetable_timeline_label($timeline_key));
+
                             $new_absolute = realpath($target_path);
                             $base_dir = realpath($upload_dir);
                             foreach (array_keys($existing_file_paths) as $old_relative) {
@@ -781,6 +924,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_class_timetable
                     mysqli_stmt_close($stmt_insert_tt);
                     $success = $success ? $success . ' ' : '';
                     $success .= 'Timetable uploaded successfully.';
+                    send_timetable_notifications($conn, [$class_id], $safe_display_name, $relative_path, 'Class Timetable');
                 } else {
                     $error = $error ? $error . ' ' : '';
                     $error .= 'Could not record the timetable in the database.';

@@ -1,7 +1,7 @@
 <?php
 // Start session and ensure no output before this
 ob_start();
-session_start();
+require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/activity_logger.php';
 

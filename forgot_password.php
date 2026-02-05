@@ -1,8 +1,9 @@
 <?php
-session_start();
-include 'db_connect.php';
+require_once __DIR__ . '/includes/init.php';
+require_once __DIR__ . '/db_connect.php';
 include_once __DIR__ . '/includes/activity_logger.php';
 include_once __DIR__ . '/includes/mailer.php';
+require_once __DIR__ . '/includes/email_notifications.php';
 
 // Ensure password_resets table exists
 $create_table = "CREATE TABLE IF NOT EXISTS password_resets (
@@ -43,8 +44,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         mysqli_stmt_bind_param($ins, 'iss', $user['id'], $token, $expires);
                         if (mysqli_stmt_execute($ins)) {
                             $resetLink = (isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http') . '://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . "/reset_password.php?token=$token";
-                            $subject = 'Password reset for ICA Tracker';
-                            $body = "<p>Hello {$user['name']},</p><p>Use the following link to reset your password (valid for 1 hour):</p><p><a href='" . htmlspecialchars($resetLink, ENT_QUOTES, 'UTF-8') . "'>Reset Password</a></p><p>If you did not request this, you can safely ignore this email.</p>";
+                            $recipientName = isset($user['name']) ? trim((string)$user['name']) : '';
+                            $recipientDisplay = $recipientName !== '' ? format_person_display($recipientName) : 'ICA Tracker User';
+                            $expiryDisplay = date('d M Y, h:i A', strtotime($expires));
 
                             $registeredEmail = trim((string)($user['email'] ?? ''));
                             $emailSent = false;
@@ -54,7 +56,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $emailError = 'No email on record.';
                             } else {
                                 try {
-                                    $emailSent = send_app_mail($registeredEmail, $subject, $body);
+                                    $emailSent = send_notification_email($registeredEmail, EMAIL_SCENARIO_PASSWORD_RESET, [
+                                        'recipient_name' => $recipientDisplay,
+                                        'reset_link' => $resetLink,
+                                        'link_expires_at' => '1 hour (expires ' . $expiryDisplay . ')',
+                                    ]);
                                     if (!$emailSent) {
                                         $emailError = 'Mailer returned no success flag.';
                                     }
