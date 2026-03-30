@@ -34,8 +34,31 @@ if (!function_exists('email_notification_logo_url')) {
         if ($logo !== '') {
             return $logo;
         }
+
+        $logoEmbed = email_notification_logo_embed_config();
+        if ($logoEmbed !== null) {
+            return 'cid:' . $logoEmbed['cid'];
+        }
+
         $appUrl = email_notification_app_url($overrides);
-        return $appUrl . '/nmimsvertical.jpg';
+        return $appUrl . '/nmimshorizontal.jpg';
+    }
+}
+
+if (!function_exists('email_notification_logo_embed_config')) {
+    function email_notification_logo_embed_config(): ?array
+    {
+        $logoPath = base_path('nmimshorizontal.jpg');
+        if (!is_file($logoPath)) {
+            return null;
+        }
+
+        return [
+            'path' => $logoPath,
+            'cid' => 'nmims_logo',
+            'name' => 'nmimshorizontal.jpg',
+            'mime' => 'image/jpeg',
+        ];
     }
 }
 
@@ -92,10 +115,68 @@ if (!function_exists('email_notification_prepare_value')) {
     }
 }
 
+if (!function_exists('email_notification_subject_assignment_timeline')) {
+    function email_notification_subject_assignment_timeline(array $data): string
+    {
+        $explicitTimeline = trim((string)($data['semester_timeline'] ?? ''));
+        if ($explicitTimeline !== '') {
+            return $explicitTimeline;
+        }
+
+        $semesterValue = trim((string)($data['semester'] ?? ''));
+        $semesterDisplay = $semesterValue;
+        if ($semesterDisplay !== '' && stripos($semesterDisplay, 'semester') === false) {
+            $semesterDisplay = 'Semester ' . $semesterDisplay;
+        }
+
+        $termLabel = trim((string)($data['semester_term'] ?? ''));
+        if ($termLabel !== '' && stripos($termLabel, 'term') === false) {
+            $termLabel .= ' Term';
+        }
+
+        $academicYear = trim((string)($data['academic_year'] ?? ''));
+        if ($academicYear !== '' && stripos($academicYear, 'AY') !== 0) {
+            $academicYear = 'AY ' . $academicYear;
+        }
+
+        $parts = [];
+        if ($semesterDisplay !== '') {
+            $parts[] = $semesterDisplay;
+        }
+        if ($termLabel !== '') {
+            $parts[] = ucfirst($termLabel);
+        }
+        if ($academicYear !== '') {
+            $parts[] = $academicYear;
+        }
+
+        $startDate = trim((string)($data['term_start_date'] ?? ''));
+        $endDate = trim((string)($data['term_end_date'] ?? ''));
+        $dateRange = '';
+        if ($startDate !== '' && $endDate !== '' && $startDate !== '0000-00-00' && $endDate !== '0000-00-00') {
+            $startObj = DateTimeImmutable::createFromFormat('Y-m-d', $startDate);
+            $endObj = DateTimeImmutable::createFromFormat('Y-m-d', $endDate);
+            if ($startObj && $endObj) {
+                $dateRange = $startObj->format('d M Y') . ' - ' . $endObj->format('d M Y');
+            }
+        }
+
+        $timeline = implode(' | ', $parts);
+        if ($timeline !== '' && $dateRange !== '') {
+            return $timeline . "\n" . $dateRange;
+        }
+        if ($timeline !== '') {
+            return $timeline;
+        }
+
+        return $dateRange;
+    }
+}
+
 if (!function_exists('email_notification_format_detail_block')) {
     function email_notification_format_detail_block(array $rows): array
     {
-        $htmlParts = [];
+        $htmlRows = [];
         $textParts = [];
         foreach ($rows as $row) {
             if (!is_array($row) || count($row) < 2) {
@@ -107,12 +188,22 @@ if (!function_exists('email_notification_format_detail_block')) {
                 continue;
             }
             $labelText = email_notification_escape_html((string)$label);
-            $htmlParts[] = '<p style="margin:0 0 6px; font-size:14px;"><strong>' . $labelText . ':</strong> ' . $prepared['html'] . '</p>';
+            $htmlRows[] = '<tr>'
+                . '<td style="padding:10px 12px; width:38%; font-size:12px; font-weight:700; color:#6b7280; letter-spacing:0.4px; text-transform:uppercase; border-bottom:1px solid #f1d4d7; vertical-align:top;">' . $labelText . '</td>'
+                . '<td style="padding:10px 12px; font-size:14px; color:#1f2937; border-bottom:1px solid #f1d4d7; vertical-align:top;">' . $prepared['html'] . '</td>'
+                . '</tr>';
             $textParts[] = $label . ': ' . $prepared['text'];
         }
 
+        $html = '';
+        if (!empty($htmlRows)) {
+            $html = '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse; background:#fff; border:1px solid #f4d9dd; border-radius:8px; overflow:hidden;">'
+                . implode('', $htmlRows)
+                . '</table>';
+        }
+
         return [
-            'html' => implode('', $htmlParts),
+            'html' => $html,
             'text' => implode(PHP_EOL, $textParts),
         ];
     }
@@ -245,10 +336,10 @@ if (!function_exists('email_notification_build_payload')) {
             case EMAIL_SCENARIO_SUBJECT_ASSIGNMENT:
                 $subjectName = trim((string)($data['subject_name'] ?? 'Subject'));
                 $role = trim((string)($data['assigned_role'] ?? 'Faculty'));
+                $semesterTimeline = email_notification_subject_assignment_timeline($data);
                 $details = email_notification_format_detail_block([
                     ['Subject', $subjectName],
-                    ['Academic Year', $data['academic_year'] ?? ''],
-                    ['Semester', $data['semester'] ?? ''],
+                    ['Semester Timeline', $semesterTimeline],
                     ['Class / Section', $data['class_section'] ?? ''],
                     ['Total Students', $data['student_count'] ?? ''],
                     ['Assigned Role', $role],
@@ -256,8 +347,8 @@ if (!function_exists('email_notification_build_payload')) {
 
                 $result['subject'] = 'Subject Assigned: ' . $subjectName;
                 $result['title'] = 'Teaching Assignment Updated';
-                $result['message_html'] = 'You have been assigned to <strong>' . email_notification_escape_html($subjectName) . '</strong> as ' . email_notification_escape_html(strtolower($role)) . '.';
-                $result['message_text'] = 'You have been assigned to ' . $subjectName . ' as ' . strtolower($role) . '.';
+                $result['message_html'] = 'You have been assigned to <strong>' . email_notification_escape_html($subjectName) . '</strong> in the capacity of <strong>' . email_notification_escape_html($role) . '</strong>.';
+                $result['message_text'] = 'You have been assigned to ' . $subjectName . ' in the capacity of ' . $role . '.';
                 $result['details_html'] = $details['html'];
                 $result['details_text'] = $details['text'];
                 $result['action_link'] = trim((string)($data['subjects_url'] ?? ($appUrl . '/teacher_dashboard.php')));
@@ -398,8 +489,13 @@ if (!function_exists('send_notification_email')) {
             $payload = email_notification_build_payload($scenario, $data);
             [$htmlBody, $textBody] = email_notification_generate_bodies($payload);
             $subject = $payload['subject'] ?? 'ICA Tracker Notification';
+            $embeddedImages = [];
+            $logoEmbed = email_notification_logo_embed_config();
+            if ($logoEmbed !== null) {
+                $embeddedImages[] = $logoEmbed;
+            }
 
-            return send_app_mail($recipientsList, $subject, $htmlBody, $textBody);
+            return send_app_mail($recipientsList, $subject, $htmlBody, $textBody, $embeddedImages);
         } catch (MailException $exception) {
             app_log('PHPMailer exception while sending notification.', [
                 'scenario' => $scenario,

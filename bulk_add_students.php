@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/academic_context.php';
 require_once __DIR__ . '/includes/email_notifications.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     header('Location: login.php');
@@ -44,6 +45,9 @@ function format_timetable_timeline_label(string $timeline): string
     if ($trimmed === '') {
         return 'General';
     }
+    if (preg_match('/^term_(\d+)$/i', $trimmed, $match)) {
+        return 'Semester Timeline ' . (int)$match[1];
+    }
     if (preg_match('/^week_(\d+)$/i', $trimmed, $match)) {
         return 'Week ' . (int)$match[1];
     }
@@ -51,13 +55,38 @@ function format_timetable_timeline_label(string $timeline): string
     return ucwords($normalized);
 }
 
-function generate_timetable_week_options(int $maxWeeks = 20): array
+function parse_semester_timeline_term_id(string $timelineKey): int
 {
-    $options = [];
-    for ($i = 1; $i <= max(1, $maxWeeks); $i++) {
-        $value = 'week_' . $i;
-        $options[$value] = 'Week ' . $i;
+    $trimmed = trim($timelineKey);
+    if (preg_match('/^term_(\d+)$/i', $trimmed, $matches)) {
+        return (int)$matches[1];
     }
+    return 0;
+}
+
+function generate_active_semester_timeline_options(mysqli $conn): array
+{
+    $terms = fetchAcademicTerms($conn);
+    $options = [];
+    foreach ($terms as $term) {
+        if (empty($term['is_current'])) {
+            continue;
+        }
+        $termId = isset($term['id']) ? (int)$term['id'] : 0;
+        if ($termId <= 0) {
+            continue;
+        }
+
+        $timelineKey = 'term_' . $termId;
+        $schoolName = trim((string)($term['school_name'] ?? ''));
+        $baseLabel = trim((string)($term['label'] ?? ''));
+        if ($baseLabel === '') {
+            $baseLabel = format_timetable_timeline_label($timelineKey);
+        }
+
+        $options[$timelineKey] = $schoolName !== '' ? ($schoolName . ' • ' . $baseLabel) : $baseLabel;
+    }
+
     return $options;
 }
 
@@ -195,9 +224,10 @@ function send_timetable_notifications(mysqli $conn, array $classIds, string $fil
     }
 }
 
-$timeline_options = generate_timetable_week_options(20);
+$timeline_options = generate_active_semester_timeline_options($conn);
+$timeline_option_map = array_fill_keys(array_keys($timeline_options), true);
 
-$class_sql = "SELECT c.id, c.class_name, c.school, c.semester, s.id AS section_id, s.section_name\n              FROM classes c\n              LEFT JOIN sections s ON s.class_id = c.id\n              ORDER BY c.school, c.semester, c.class_name, s.section_name";
+$class_sql = "SELECT c.id, c.class_name, c.school, c.semester, c.academic_term_id, s.id AS section_id, s.section_name\n              FROM classes c\n              LEFT JOIN sections s ON s.class_id = c.id\n              ORDER BY c.school, c.semester, c.class_name, s.section_name";
 $class_result = mysqli_query($conn, $class_sql);
 if ($class_result) {
     while ($row = mysqli_fetch_assoc($class_result)) {
@@ -214,6 +244,7 @@ if ($class_result) {
                 'class_name' => $baseClassName,
                 'school' => $school,
                 'semester' => $semester,
+                'academic_term_id' => isset($row['academic_term_id']) ? (int)$row['academic_term_id'] : 0,
                 'label' => format_class_label($baseClassName, '', $semester, $school)
             ];
         }
@@ -743,9 +774,25 @@ copy_students_end:
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetable'])) {
     $timeline_key = trim((string)($_POST['timeline_key'] ?? ''));
+    $selected_term_id = parse_semester_timeline_term_id($timeline_key);
+    $target_classes = [];
+
+    foreach ($class_meta_map as $class_meta) {
+        $classTermId = isset($class_meta['academic_term_id']) ? (int)$class_meta['academic_term_id'] : 0;
+        if ($selected_term_id > 0 && $classTermId === $selected_term_id) {
+            $target_classes[] = $class_meta;
+        }
+    }
+
     if ($timeline_key === '') {
         $error = $error ? $error . ' ' : '';
-        $error .= 'Please choose a timeline before uploading the timetable.';
+        $error .= 'Please choose an active semester timeline before uploading the timetable.';
+    } elseif (!isset($timeline_option_map[$timeline_key])) {
+        $error = $error ? $error . ' ' : '';
+        $error .= 'Please choose a valid active semester timeline.';
+    } elseif ($selected_term_id <= 0) {
+        $error = $error ? $error . ' ' : '';
+        $error .= 'Invalid semester timeline selected.';
     } elseif (!preg_match('/^[A-Za-z0-9_\-]+$/', $timeline_key)) {
         $error = $error ? $error . ' ' : '';
         $error .= 'Timeline contains unsupported characters. Use letters, numbers, dashes, or underscores only.';
@@ -755,6 +802,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetab
     } elseif (empty($class_meta_map)) {
         $error = $error ? $error . ' ' : '';
         $error .= 'No classes are available to receive the timetable broadcast.';
+    } elseif (empty($target_classes)) {
+        $error = $error ? $error . ' ' : '';
+        $error .= 'No classes are assigned to the selected semester timeline.';
     } else {
         $upload_dir = __DIR__ . '/uploads/class_timetables/';
         if (!is_dir($upload_dir) && !mkdir($upload_dir, 0777, true) && !is_dir($upload_dir)) {
@@ -830,7 +880,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetab
                         $error .= 'Unable to prepare the broadcast timetable insertion.';
                     } else {
                         $insert_ok = true;
-                        foreach ($class_meta_map as $class_meta) {
+                        foreach ($target_classes as $class_meta) {
                             $class_id = isset($class_meta['id']) ? (int)$class_meta['id'] : 0;
                             if ($class_id <= 0) {
                                 continue;
@@ -853,17 +903,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetab
                             $success = $success ? $success . ' ' : '';
                             $success .= sprintf(
                                 "Broadcast timetable for %s uploaded to %d class(es).",
-                                format_timetable_timeline_label($timeline_key),
-                                count($class_meta_map)
+                                $timeline_options[$timeline_key] ?? format_timetable_timeline_label($timeline_key),
+                                count($target_classes)
                             );
 
                             $broadcastClassIds = [];
-                            foreach ($class_meta_map as $class_meta) {
+                            foreach ($target_classes as $class_meta) {
                                 if (isset($class_meta['id'])) {
                                     $broadcastClassIds[] = (int)$class_meta['id'];
                                 }
                             }
-                            send_timetable_notifications($conn, $broadcastClassIds, $safe_display_name, $relative_path, format_timetable_timeline_label($timeline_key));
+                            send_timetable_notifications($conn, $broadcastClassIds, $safe_display_name, $relative_path, $timeline_options[$timeline_key] ?? format_timetable_timeline_label($timeline_key));
 
                             $new_absolute = realpath($target_path);
                             $base_dir = realpath($upload_dir);
@@ -882,6 +932,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_global_timetab
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_global_timetable'])) {
+    $timeline_key = trim((string)($_POST['timeline_key'] ?? ''));
+    if ($timeline_key === '' || !preg_match('/^[A-Za-z0-9_\-]+$/', $timeline_key)) {
+        $error = $error ? $error . ' ' : '';
+        $error .= 'Invalid semester timeline selected for broadcast deletion.';
+    } else {
+        $file_paths = [];
+        $lookup_stmt = mysqli_prepare($conn, "SELECT DISTINCT file_path FROM class_timetables WHERE timeline = ? AND is_broadcast = 1");
+        if ($lookup_stmt) {
+            mysqli_stmt_bind_param($lookup_stmt, 's', $timeline_key);
+            mysqli_stmt_execute($lookup_stmt);
+            $lookup_result = mysqli_stmt_get_result($lookup_stmt);
+            if ($lookup_result) {
+                while ($lookup_row = mysqli_fetch_assoc($lookup_result)) {
+                    $path = trim((string)($lookup_row['file_path'] ?? ''));
+                    if ($path !== '') {
+                        $file_paths[$path] = true;
+                    }
+                }
+                mysqli_free_result($lookup_result);
+            }
+            mysqli_stmt_close($lookup_stmt);
+        }
+
+        $delete_stmt = mysqli_prepare($conn, "DELETE FROM class_timetables WHERE timeline = ? AND is_broadcast = 1");
+        if (!$delete_stmt) {
+            $error = $error ? $error . ' ' : '';
+            $error .= 'Unable to prepare broadcast deletion for the selected semester timeline.';
+        } else {
+            mysqli_stmt_bind_param($delete_stmt, 's', $timeline_key);
+            $delete_ok = mysqli_stmt_execute($delete_stmt);
+            $affected = mysqli_stmt_affected_rows($delete_stmt);
+            mysqli_stmt_close($delete_stmt);
+
+            if (!$delete_ok) {
+                $error = $error ? $error . ' ' : '';
+                $error .= 'Unable to delete the broadcast timetable for the selected semester timeline.';
+            } elseif ($affected <= 0) {
+                $error = $error ? $error . ' ' : '';
+                $error .= 'No broadcast timetable found for the selected semester timeline.';
+            } else {
+                $upload_dir = realpath(__DIR__ . '/uploads/class_timetables');
+                foreach (array_keys($file_paths) as $relative_path) {
+                    $absolute_path = realpath(__DIR__ . '/' . ltrim($relative_path, '/'));
+                    if (!$absolute_path || !$upload_dir) {
+                        continue;
+                    }
+                    if (strpos($absolute_path, $upload_dir) === 0) {
+                        @unlink($absolute_path);
+                    }
+                }
+
+                $success = $success ? $success . ' ' : '';
+                $success .= sprintf(
+                    'Broadcast timetable deleted for %s.',
+                    $timeline_options[$timeline_key] ?? format_timetable_timeline_label($timeline_key)
+                );
             }
         }
     }
@@ -1133,7 +1245,7 @@ if ($summary_result) {
 }
 
 $broadcast_summary = [];
-$broadcast_sql = "SELECT timeline, MIN(file_name) AS file_name, MIN(file_path) AS file_path, MAX(uploaded_at) AS uploaded_at, COUNT(*) AS class_count\n                    FROM class_timetables\n                    WHERE is_broadcast = 1 AND timeline IS NOT NULL AND timeline <> ''\n                    GROUP BY timeline\n                    ORDER BY uploaded_at DESC";
+$broadcast_sql = "SELECT timeline, MIN(file_name) AS file_name, MIN(file_path) AS file_path, MAX(uploaded_at) AS uploaded_at, COUNT(*) AS class_count\n                    FROM class_timetables\n                    WHERE is_broadcast = 1 AND timeline IS NOT NULL AND timeline <> '' AND timeline REGEXP '^term_[0-9]+$'\n                    GROUP BY timeline\n                    ORDER BY uploaded_at DESC";
 $broadcast_result = mysqli_query($conn, $broadcast_sql);
 if ($broadcast_result) {
     while ($row = mysqli_fetch_assoc($broadcast_result)) {
@@ -1574,6 +1686,7 @@ foreach ($class_sections_map as $cid => $sections) {
             <a href="change_roles.php"><i class="fas fa-user-cog"></i> <span>Change Roles</span></a>
             <a href="bulk_add_students.php" class="active"><i class="fas fa-user-plus"></i> <span>Add Students</span></a>
             <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -1800,9 +1913,9 @@ foreach ($class_sections_map as $cid => $sections) {
                         <form method="POST" enctype="multipart/form-data" class="broadcast-upload-form">
                             <input type="hidden" name="upload_global_timetable" value="1">
                             <div class="form-group">
-                                <label>Select Timeline</label>
+                                <label>Select Semester Timeline (Active)</label>
                                 <select name="timeline_key" required>
-                                    <option value="">-- Select Timeline --</option>
+                                    <option value="">-- Select Semester Timeline --</option>
                                     <?php foreach ($timeline_options as $timeline_value => $timeline_label): ?>
                                         <option value="<?php echo htmlspecialchars($timeline_value); ?>"><?php echo htmlspecialchars($timeline_label); ?></option>
                                     <?php endforeach; ?>
@@ -1812,9 +1925,12 @@ foreach ($class_sections_map as $cid => $sections) {
                                 <label>Upload Timetable File</label>
                                 <input type="file" name="global_timetable_file" required>
                             </div>
-                            <button type="submit" class="btn">Upload for All Classes</button>
+                            <button type="submit" class="btn" <?php echo empty($timeline_options) ? 'disabled' : ''; ?>>Upload for All Classes</button>
                         </form>
-                        <p class="broadcast-note">Uploading replaces the existing timetable for the selected timeline across every class.</p>
+                        <p class="broadcast-note">Uploading replaces the existing timetable for the selected active semester timeline and shares one file to every class assigned to that timeline.</p>
+                        <?php if (empty($timeline_options)): ?>
+                            <p class="broadcast-note" style="margin-top:8px;color:#A6192E;">No active semester timeline found. Please activate a current semester timeline in Academic Calendar first.</p>
+                        <?php endif; ?>
                         <?php if (!empty($broadcast_summary)): ?>
                             <table class="broadcast-timeline-table">
                                 <thead>
@@ -1830,7 +1946,7 @@ foreach ($class_sections_map as $cid => $sections) {
                                     <?php $broadcastIndex = 0; foreach ($broadcast_summary as $timeline_key => $timeline_row): ?>
                                         <?php
                                             $broadcastIndex++;
-                                            $timelineLabel = format_timetable_timeline_label($timeline_key);
+                                            $timelineLabel = $timeline_options[$timeline_key] ?? format_timetable_timeline_label($timeline_key);
                                             $displayName = $timeline_row['file_name'] ?? '';
                                             $filePath = $timeline_row['file_path'] ?? '';
                                             $classCount = (int)($timeline_row['class_count'] ?? 0);
@@ -1851,13 +1967,21 @@ foreach ($class_sections_map as $cid => $sections) {
                                             <td><?php echo htmlspecialchars($classCount); ?> classes</td>
                                             <td><?php echo htmlspecialchars($uploadedDisplay); ?></td>
                                             <td>
-                                                <div class="broadcast-actions">
-                                                    <form method="POST" enctype="multipart/form-data">
-                                                        <input type="hidden" name="upload_global_timetable" value="1">
-                                                        <input type="hidden" name="timeline_key" value="<?php echo htmlspecialchars($timeline_key); ?>">
-                                                        <input type="file" name="global_timetable_file" id="broadcast-file-<?php echo $broadcastIndex; ?>" class="sr-only-file" required onchange="this.form.submit()">
-                                                        <label for="broadcast-file-<?php echo $broadcastIndex; ?>" class="upload-timetable-btn"><i class="fas fa-sync-alt"></i>Replace file</label>
-                                                    </form>
+                                                <div class="timetable-edit">
+                                                    <button type="button" class="timetable-edit-toggle">Edit</button>
+                                                    <div class="broadcast-actions timetable-delete-form">
+                                                        <form method="POST" enctype="multipart/form-data">
+                                                            <input type="hidden" name="upload_global_timetable" value="1">
+                                                            <input type="hidden" name="timeline_key" value="<?php echo htmlspecialchars($timeline_key); ?>">
+                                                            <input type="file" name="global_timetable_file" id="broadcast-file-<?php echo $broadcastIndex; ?>" class="sr-only-file" required onchange="this.form.submit()">
+                                                            <label for="broadcast-file-<?php echo $broadcastIndex; ?>" class="upload-timetable-btn"><i class="fas fa-sync-alt"></i>Replace file</label>
+                                                        </form>
+                                                        <form method="POST" class="timetable-delete-form">
+                                                            <input type="hidden" name="delete_global_timetable" value="1">
+                                                            <input type="hidden" name="timeline_key" value="<?php echo htmlspecialchars($timeline_key); ?>">
+                                                            <button type="submit" class="timetable-delete-btn" onclick="return confirm('Delete the broadcast timetable for this semester timeline?');"><i class="fas fa-trash-alt"></i> Delete</button>
+                                                        </form>
+                                                    </div>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1865,7 +1989,7 @@ foreach ($class_sections_map as $cid => $sections) {
                                 </tbody>
                             </table>
                         <?php else: ?>
-                            <p class="broadcast-note" style="margin-top:12px;">No broadcast timetables found yet. Upload a file to start sharing weekly schedules.</p>
+                            <p class="broadcast-note" style="margin-top:12px;">No broadcast timetables found yet. Upload a file to start sharing semester timeline schedules.</p>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -2845,12 +2969,16 @@ foreach ($class_sections_map as $cid => $sections) {
                         if (!container) {
                             return;
                         }
-                        const form = container.querySelector('.timetable-delete-form');
-                        if (!form) {
+                        const forms = container.querySelectorAll('.timetable-delete-form');
+                        if (!forms.length) {
                             return;
                         }
-                        const isVisible = form.classList.toggle('is-visible');
-                        form.style.display = isVisible ? 'block' : 'none';
+                        const firstForm = forms[0];
+                        const shouldShow = !firstForm.classList.contains('is-visible');
+                        forms.forEach(function (form) {
+                            form.classList.toggle('is-visible', shouldShow);
+                            form.style.display = shouldShow ? 'block' : 'none';
+                        });
                     });
                 });
             });

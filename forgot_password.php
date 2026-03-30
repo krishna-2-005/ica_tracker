@@ -43,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($ins) {
                         mysqli_stmt_bind_param($ins, 'iss', $user['id'], $token, $expires);
                         if (mysqli_stmt_execute($ins)) {
-                            $resetLink = (isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http') . '://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . "/reset_password.php?token=$token";
+                            $resetLink = email_notification_app_url() . '/reset_password.php?token=' . rawurlencode($token);
                             $recipientName = isset($user['name']) ? trim((string)$user['name']) : '';
                             $recipientDisplay = $recipientName !== '' ? format_person_display($recipientName) : 'ICA Tracker User';
                             $expiryDisplay = date('d M Y, h:i A', strtotime($expires));

@@ -4,6 +4,47 @@ declare(strict_types=1);
 use App\Support\ConfigRepository;
 use Dotenv\Dotenv;
 
+if (!function_exists('app_load_env_fallback')) {
+    function app_load_env_fallback(string $envFile): void
+    {
+        $lines = @file($envFile, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            return;
+        }
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || strpos($trimmed, '#') === 0) {
+                continue;
+            }
+
+            $separatorPosition = strpos($trimmed, '=');
+            if ($separatorPosition === false) {
+                continue;
+            }
+
+            $key = trim(substr($trimmed, 0, $separatorPosition));
+            if ($key === '') {
+                continue;
+            }
+
+            $value = trim(substr($trimmed, $separatorPosition + 1));
+            $valueLength = strlen($value);
+            if ($valueLength >= 2) {
+                $firstChar = $value[0];
+                $lastChar = $value[$valueLength - 1];
+                if (($firstChar === '"' && $lastChar === '"') || ($firstChar === "'" && $lastChar === "'")) {
+                    $value = substr($value, 1, -1);
+                }
+            }
+
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+            @putenv($key . '=' . $value);
+        }
+    }
+}
+
 if (defined('APP_BOOTSTRAPPED')) {
     return;
 }
@@ -35,10 +76,12 @@ if (!class_exists(ConfigRepository::class)) {
 }
 
 $rootPath = dirname(__DIR__);
-if (class_exists(Dotenv::class)) {
-    $envFile = $rootPath . DIRECTORY_SEPARATOR . '.env';
-    if (is_file($envFile)) {
+ $envFile = $rootPath . DIRECTORY_SEPARATOR . '.env';
+if (is_file($envFile)) {
+    if (class_exists(Dotenv::class)) {
         Dotenv::createImmutable($rootPath)->safeLoad();
+    } else {
+        app_load_env_fallback($envFile);
     }
 }
 

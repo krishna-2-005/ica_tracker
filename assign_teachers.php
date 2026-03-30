@@ -248,12 +248,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $roleLabel = $teacherInfo['role'] === 'program_chair' ? 'Program Chair' : 'Faculty';
                     $academicYear = is_array($activeTerm) ? ($activeTerm['academic_year'] ?? '') : '';
                     $semesterValue = $assignment_class_meta['semester'] ?? '';
+                    $semesterTimeline = is_array($activeTerm) ? trim((string)($activeTerm['label'] ?? '')) : '';
+                    $termName = is_array($activeTerm) ? trim((string)($activeTerm['semester_term'] ?? '')) : '';
+                    $termStartDate = is_array($activeTerm) ? trim((string)($activeTerm['start_date'] ?? '')) : '';
+                    $termEndDate = is_array($activeTerm) ? trim((string)($activeTerm['end_date'] ?? '')) : '';
 
                     send_notification_email($teacherInfo['email'], EMAIL_SCENARIO_SUBJECT_ASSIGNMENT, [
                         'recipient_name' => $recipientName,
                         'subject_name' => $subject_details['subject_name'] ?? '',
                         'academic_year' => $academicYear,
                         'semester' => $semesterValue,
+                        'semester_timeline' => $semesterTimeline,
+                        'semester_term' => $termName,
+                        'term_start_date' => $termStartDate,
+                        'term_end_date' => $termEndDate,
                         'class_section' => $classLabel,
                         'student_count' => $studentCount > 0 ? (string)$studentCount : '',
                         'assigned_role' => $roleLabel,
@@ -1074,6 +1082,7 @@ usort($teacher_card_data, static function ($a, $b) {
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
                        <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">

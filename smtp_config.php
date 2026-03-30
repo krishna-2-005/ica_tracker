@@ -9,13 +9,14 @@ if (php_sapi_name() !== 'cli') {
 }
 
 return [
-    'enabled' => false,
-    'host' => '',
+    'enabled' => true,
+    'host' => 'smtp-mail.outlook.com',
     'port' => 587,
     'encryption' => 'tls',
-    'username' => '',
-    'password' => '',
-    'from_email' => 'no-reply@example.com',
+    'username' => 'kuchurusai.krishna34@nmims.in',
+    'password' => 'Anitha@1984',
+    'from_email' => 'kuchurusai.krishna34@nmims.in',
     'from_name' => 'ICA Tracker',
     'debug' => false,
 ];
+

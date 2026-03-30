@@ -4,6 +4,7 @@ require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/activity_logger.php';
 
 $msg = '';
+$canReset = false;
 $token = $_GET['token'] ?? ($_POST['token'] ?? '');
 if ($token === '') {
     $msg = 'Invalid or missing token.';
@@ -19,6 +20,7 @@ if ($token === '') {
             if (strtotime($row['expires_at']) < time()) {
                 $msg = 'Token expired.';
             } else {
+                $canReset = true;
                 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $p1 = $_POST['password'] ?? '';
                     $p2 = $_POST['confirm_password'] ?? '';
@@ -61,32 +63,77 @@ mysqli_close($conn);
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Reset Password</title>
 <link rel="icon" type="image/png" href="nmimsvertical.jpg">
 <link rel="apple-touch-icon" href="nmimsvertical.jpg">
+<link rel="stylesheet" href="ica_tracker.css">
 <style>
-body{font-family:Arial,Helvetica,sans-serif;background:#f7f8fb;padding:40px}
-.card{max-width:480px;margin:0 auto;background:#fff;padding:28px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.06)}
-input{width:100%;padding:12px;margin:8px 0;border-radius:8px;border:1px solid #ddd}
-.btn{background:#BA0C2F;color:#fff;padding:10px 14px;border-radius:8px;border:none;cursor:pointer}
-.msg{margin:12px 0;color:#333}
+body { min-height: 100vh; }
+.reset-shell {
+    max-width: 560px;
+    margin: 48px auto;
+}
+.reset-card {
+    background: #fff;
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.1);
+}
+.reset-title {
+    font-size: 1.9rem;
+    color: #A6192E;
+    margin-bottom: 12px;
+}
+.msg {
+    margin: 12px 0 18px;
+    color: #34495e;
+    font-weight: 600;
+}
+.reset-form label {
+    margin-top: 10px;
+}
+.reset-actions {
+    margin-top: 14px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.back-link {
+    color: #A6192E;
+    font-weight: 600;
+    text-decoration: none;
+}
+.back-link:hover {
+    text-decoration: underline;
+}
 </style>
 </head>
 <body>
-<div class="card">
-    <h2>Reset Password</h2>
-    <p class="msg"><?php echo htmlspecialchars($msg); ?></p>
-    <?php if (strpos($msg, 'Invalid') === false && strpos($msg, 'expired') === false): ?>
-    <form method="POST">
-        <input type="hidden" name="token" value="<?php echo htmlspecialchars($token); ?>">
-        <label>New password</label>
-        <input type="password" name="password" required>
-        <label>Confirm new password</label>
-        <input type="password" name="confirm_password" required>
-        <button class="btn" type="submit">Set password</button>
-    </form>
-    <?php endif; ?>
-    <p style="margin-top:12px"><a href="login.php">Back to Login</a></p>
+<div class="reset-shell">
+    <div class="reset-card">
+        <h2 class="reset-title">Reset Password</h2>
+        <p class="msg"><?php echo htmlspecialchars($msg); ?></p>
+        <?php if ($canReset): ?>
+        <form method="POST" class="reset-form">
+            <input type="hidden" name="token" value="<?php echo htmlspecialchars($token); ?>">
+            <label>New password</label>
+            <input type="password" name="password" required>
+            <label>Confirm new password</label>
+            <input type="password" name="confirm_password" required>
+            <div class="reset-actions">
+                <button class="btn" type="submit">Set Password</button>
+                <a class="back-link" href="login.php">Back to Login</a>
+            </div>
+        </form>
+        <?php else: ?>
+        <div class="reset-actions">
+            <a class="back-link" href="forgot_password.php">Request New Reset Link</a>
+            <a class="back-link" href="login.php">Back to Login</a>
+        </div>
+        <?php endif; ?>
+    </div>
 </div>
 </body>
 </html>

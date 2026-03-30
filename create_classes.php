@@ -699,6 +699,7 @@ $classes_result = mysqli_query($conn, $classes_query);
             <a href="bulk_add_students.php"><i class="fas fa-user-plus"></i> <span>Add Students</span></a>
                         <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
