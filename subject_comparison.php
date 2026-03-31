@@ -614,6 +614,70 @@ foreach ($subjectsById as $subjectId => $subjectName) {
     }
 }
 
+// Build list of all unique ICA components for filtering
+$allComponents = [];
+$componentsBySubject = [];
+foreach ($icaMarks as $mark) {
+    $componentName = trim((string)($mark['component_name'] ?? ''));
+    $subjectName = trim((string)($mark['subject_name'] ?? ''));
+    if ($componentName !== '' && $subjectName !== '') {
+        if (!isset($componentsBySubject[$subjectName])) {
+            $componentsBySubject[$subjectName] = [];
+        }
+        if (!in_array($componentName, $componentsBySubject[$subjectName], true)) {
+            $componentsBySubject[$subjectName][] = $componentName;
+        }
+        if (!in_array($componentName, $allComponents, true)) {
+            $allComponents[] = $componentName;
+        }
+    }
+}
+sort($allComponents);
+
+// Get selected component filters from GET
+$selectedComponents = [];
+if (isset($_GET['components']) && is_array($_GET['components'])) {
+    $selectedComponents = array_map(static function ($c) {
+        return trim((string)$c);
+    }, $_GET['components']);
+    $selectedComponents = array_filter($selectedComponents);
+}
+
+// Filter subject summaries and chart data by component if filters are applied
+if (!empty($selectedComponents)) {
+    $filteredSummaries = [];
+    foreach ($subjectSummaries as $summary) {
+        $subjectHasComponent = false;
+        $subjectName = $summary['subject_name'];
+        if (isset($componentsBySubject[$subjectName])) {
+            foreach ($selectedComponents as $selectedComp) {
+                if (in_array($selectedComp, $componentsBySubject[$subjectName], true)) {
+                    $subjectHasComponent = true;
+                    break;
+                }
+            }
+        }
+        if ($subjectHasComponent) {
+            $filteredSummaries[] = $summary;
+        }
+    }
+    $subjectSummaries = $filteredSummaries;
+    
+    $filteredChartPayload = [];
+    foreach ($subjectChartPayload as $chart) {
+        $subjectName = $chart['subject_name'];
+        if (isset($componentsBySubject[$subjectName])) {
+            foreach ($selectedComponents as $selectedComp) {
+                if (in_array($selectedComp, $componentsBySubject[$subjectName], true)) {
+                    $filteredChartPayload[] = $chart;
+                    break;
+                }
+            }
+        }
+    }
+    $subjectChartPayload = $filteredChartPayload;
+}
+
 usort($subjectSummaries, static function ($a, $b) {
     return strcasecmp($a['subject_name'], $b['subject_name']);
 });
@@ -633,6 +697,12 @@ mysqli_close($conn);
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .comparison-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+        .filter-section { background: #f9f9f9; padding: 16px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #e0e0e0; }
+        .filter-title { font-size: 0.9rem; font-weight: 600; color: #333; margin-bottom: 12px; display: block; }
+        .component-filters { display: flex; flex-wrap: wrap; gap: 10px; }
+        .filter-checkbox-wrapper { display: flex; align-items: center; gap: 6px; }
+        .filter-checkbox-wrapper input[type="checkbox"] { cursor: pointer; }
+        .filter-checkbox-wrapper label { cursor: pointer; font-size: 0.9rem; margin: 0; }
         .comparison-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; margin-top: 20px; }
         .comparison-card { border: 1px solid #ececec; border-radius: 12px; padding: 18px; background: #fff; box-shadow: 0 8px 16px rgba(0,0,0,0.04); }
         .comparison-card h4 { margin: 0 0 8px; font-size: 1.1rem; }
@@ -649,6 +719,16 @@ mysqli_close($conn);
     </style>
 </head>
 <body>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const checkboxes = document.querySelectorAll('.filter-checkbox-wrapper input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    document.getElementById('filterForm').submit();
+                });
+            });
+        });
+    </script>
     <div class="dashboard">
         <div class="sidebar">
             <h2>ICA Tracker</h2>
@@ -670,6 +750,28 @@ mysqli_close($conn);
                 <a class="back-link" href="student_dashboard.php"><i class="fas fa-arrow-left"></i> Back to dashboard</a>
             </div>
             <div class="container">
+                <?php if (!empty($allComponents)): ?>
+                    <div class="filter-section">
+                        <label class="filter-title">Filter by ICA Component (Multiple selections allowed):</label>
+                        <form method="GET" id="filterForm" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                            <div class="component-filters">
+                                <?php foreach ($allComponents as $component): ?>
+                                    <div class="filter-checkbox-wrapper">
+                                        <input type="checkbox" id="comp_<?php echo htmlspecialchars(md5($component)); ?>" name="components[]" value="<?php echo htmlspecialchars($component); ?>" <?php echo in_array($component, $selectedComponents, true) ? 'checked' : ''; ?>>
+                                        <label for="comp_<?php echo htmlspecialchars(md5($component)); ?>"><?php echo htmlspecialchars($component); ?></label>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="display: flex; gap: 8px; margin-top: 8px; width: 100%;">
+                                <button type="submit" class="btn btn-primary" style="padding: 6px 16px; font-size: 0.9rem;">Apply Filter</button>
+                                <?php if (!empty($selectedComponents)): ?>
+                                    <a href="subject_comparison.php" class="btn btn-secondary" style="padding: 6px 16px; font-size: 0.9rem; text-decoration: none; display: inline-block;">Clear Filters</a>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                    </div>
+                <?php endif; ?>
+                
                 <?php if ($timelineMismatch): ?>
                     <div class="card" style="border-left:4px solid #A6192E;">
                         <h3 class="section-title">Timeline not linked</h3>

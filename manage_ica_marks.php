@@ -3,6 +3,7 @@ require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
 require_once __DIR__ . '/includes/email_notifications.php';
+require_once __DIR__ . '/includes/activity_logger.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'teacher') {
     header('Location: login.php');
     exit;
@@ -387,6 +388,94 @@ function send_marks_published_notifications(mysqli $conn, array $notifications, 
                 ]);
             }
         }
+    }
+}
+
+function send_bulk_marks_upload_notifications(mysqli $conn, array $notifications, array $componentContexts, string $teacherNameDisplay): void {
+    if (empty($notifications) || empty($componentContexts)) {
+        return;
+    }
+
+    $studentIds = [];
+    $subjectIds = [];
+
+    foreach ($componentContexts as $context) {
+        $componentMeta = $context['component'] ?? [];
+        $subjectId = isset($componentMeta['subject_id']) ? (int)$componentMeta['subject_id'] : 0;
+        if ($subjectId > 0) {
+            $subjectIds[$subjectId] = true;
+        }
+    }
+
+    foreach ($notifications as $componentInstances) {
+        foreach ($componentInstances as $studentsMarks) {
+            foreach ($studentsMarks as $studentId => $_) {
+                $studentIds[(int)$studentId] = true;
+            }
+        }
+    }
+
+    if (empty($studentIds)) {
+        return;
+    }
+
+    $students = email_notification_fetch_students($conn, array_keys($studentIds));
+    $subjectNames = email_notification_fetch_subject_names($conn, array_keys($subjectIds));
+    $marksUrl = email_notification_app_url() . '/view_marks.php';
+    $facultyDisplay = $teacherNameDisplay !== '' ? $teacherNameDisplay : 'Faculty';
+
+    $rowsByStudent = [];
+    foreach ($notifications as $componentId => $instances) {
+        if (!isset($componentContexts[$componentId]['component'])) {
+            continue;
+        }
+
+        $componentMeta = $componentContexts[$componentId]['component'];
+        $componentName = trim((string)($componentMeta['component_name'] ?? 'ICA Component'));
+        $subjectId = isset($componentMeta['subject_id']) ? (int)$componentMeta['subject_id'] : 0;
+        $subjectName = $subjectNames[$subjectId] ?? 'Subject';
+        $instancesCount = isset($componentMeta['instances']) ? (int)$componentMeta['instances'] : 1;
+        $maxPerInstance = isset($componentMeta['marks_per_instance']) ? (float)$componentMeta['marks_per_instance'] : null;
+        $maxDisplay = $maxPerInstance !== null ? format_component_mark_value($maxPerInstance) : '';
+
+        foreach ($instances as $instanceNumber => $studentsMarks) {
+            $componentLabel = $componentName;
+            if ($instancesCount > 1) {
+                $componentLabel .= ' - Instance ' . (int)$instanceNumber;
+            }
+
+            foreach ($studentsMarks as $studentId => $markInfo) {
+                $studentId = (int)$studentId;
+                $rowsByStudent[$studentId][] = [
+                    'subject_name' => $subjectName,
+                    'component_name' => $componentLabel,
+                    'marks_obtained' => $markInfo['display'] ?? 'Not recorded',
+                    'max_marks' => $maxDisplay,
+                ];
+            }
+        }
+    }
+
+    foreach ($rowsByStudent as $studentId => $rows) {
+        $studentInfo = $students[$studentId] ?? null;
+        if (!$studentInfo) {
+            continue;
+        }
+
+        $email = $studentInfo['email'] ?? '';
+        if ($email === '') {
+            continue;
+        }
+
+        $recipientName = $studentInfo['name'] !== '' ? $studentInfo['name'] : ($studentInfo['sap_id'] ?? 'Student');
+
+        send_notification_email($email, EMAIL_SCENARIO_ICA_MARKS_BULK_PUBLISHED, [
+            'recipient_name' => $recipientName,
+            'marks_rows' => $rows,
+            'faculty_name' => $facultyDisplay,
+            'published_at' => date('d M Y, h:i A'),
+            'marks_url' => $marksUrl,
+        ]);
     }
 }
 
@@ -1053,6 +1142,7 @@ if (isset($_POST['upload_csv'])) {
         $component_name = $component['component_name'];
         $instances = $meta['instances'];
         $component_column_map[$component_id] = [];
+        $marks_per_instance = $meta['marks_per_instance'] ?? null;
 
         for ($instance_number = 1; $instance_number <= $instances; $instance_number++) {
             $expected_label = build_component_instance_header_label($component_name, $instance_number, $instances, $marks_per_instance);
@@ -1246,7 +1336,58 @@ if (isset($_POST['upload_csv'])) {
             $labels[] = $component['component_name'] . ($instances > 1 ? ' (all instances)' : '');
         }
         $_SESSION['success_message'] = "Marks uploaded successfully for: " . implode(', ', $labels) . '.';
-        send_marks_published_notifications($conn, $notifications, $component_contexts, $teacherNameForEmails);
+
+        $studentsById = [];
+        foreach ($students_reference as $studentRow) {
+            $studentsById[(int)$studentRow['id']] = $studentRow;
+        }
+        $detailRows = [];
+        foreach ($notifications as $componentId => $instancesData) {
+            $componentMeta = $component_contexts[$componentId]['component'] ?? null;
+            $componentName = trim((string)($componentMeta['component_name'] ?? 'Component'));
+            $instancesCount = isset($component_contexts[$componentId]['instances']) ? (int)$component_contexts[$componentId]['instances'] : 1;
+            foreach ($instancesData as $instanceNo => $studentData) {
+                foreach ($studentData as $studentId => $markInfo) {
+                    $studentInfo = $studentsById[(int)$studentId] ?? null;
+                    if (!$studentInfo) {
+                        continue;
+                    }
+                    $detailRows[] = [
+                        'student_id' => (int)$studentId,
+                        'student_name' => (string)($studentInfo['name'] ?? ''),
+                        'sap_id' => (string)($studentInfo['sap_id'] ?? ''),
+                        'component_id' => (int)$componentId,
+                        'component_name' => $componentName,
+                        'instance_number' => $instancesCount > 1 ? (int)$instanceNo : 1,
+                        'marks' => (string)($markInfo['display'] ?? 'Not recorded'),
+                    ];
+                }
+            }
+        }
+
+        log_activity($conn, [
+            'actor_id' => $teacher_id,
+            'event_type' => 'marks_csv_bulk_upload',
+            'event_label' => 'ICA marks uploaded via CSV',
+            'description' => 'Bulk ICA marks upload completed.',
+            'object_type' => 'ica_marks',
+            'object_id' => implode(',', $component_order),
+            'object_label' => implode(', ', $labels),
+            'metadata' => [
+                'subject_id' => $subject_id,
+                'class_id' => $class_id,
+                'section_id' => $section_id,
+                'component_ids' => $component_order,
+                'components' => $labels,
+                'students_count' => count($students_reference),
+                'rows_saved' => $rows_saved,
+                'details_rows' => $detailRows,
+            ],
+            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+        ]);
+
+        send_bulk_marks_upload_notifications($conn, $notifications, $component_contexts, $teacherNameForEmails);
     } else {
         $_SESSION['error_message'] = "Some marks could not be saved. Please try again.";
     }
@@ -1368,6 +1509,44 @@ if (isset($_POST['submit_marks'])) {
     if ($rows_saved === $rows_attempted) {
         $instance_label = ($component['instances'] > 1) ? $component['component_name'] . " (Instance " . $instance_number . ")" : $component['component_name'];
         $_SESSION['success_message'] = "Marks for '" . $instance_label . "' have been submitted successfully!";
+
+        $detailRows = [];
+        foreach ($students as $studentRow) {
+            $studentId = (int)$studentRow['id'];
+            $detailRows[] = [
+                'student_id' => $studentId,
+                'student_name' => (string)($studentRow['name'] ?? ''),
+                'sap_id' => (string)($studentRow['sap_id'] ?? ''),
+                'component_id' => (int)$component_id,
+                'component_name' => (string)($component['component_name'] ?? 'Component'),
+                'instance_number' => (int)$instance_number,
+                'marks' => (string)($notifications[$component_id][$instance_number][$studentId]['display'] ?? 'Not recorded'),
+            ];
+        }
+
+        log_activity($conn, [
+            'actor_id' => $teacher_id,
+            'event_type' => 'marks_manual_update',
+            'event_label' => 'ICA marks submitted manually',
+            'description' => 'Manual ICA marks submission completed.',
+            'object_type' => 'ica_marks',
+            'object_id' => (string)$component_id,
+            'object_label' => $instance_label,
+            'metadata' => [
+                'component_id' => $component_id,
+                'component_name' => $component['component_name'] ?? 'Component',
+                'subject_id' => $component['subject_id'] ?? null,
+                'class_id' => $requested_class_id,
+                'section_id' => $requested_section_id,
+                'instance_number' => $instance_number,
+                'students_count' => count($students),
+                'rows_saved' => $rows_saved,
+                'details_rows' => $detailRows,
+            ],
+            'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+        ]);
+
         send_marks_published_notifications($conn, $notifications, [$component_id => $context], $teacherNameForEmails);
     } else {
         $_SESSION['error_message'] = "Some marks could not be saved. Please try again.";

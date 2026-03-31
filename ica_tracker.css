@@ -1,3 +1,8 @@
+html,
+body {
+    height: 100%;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -10,6 +15,11 @@ body {
     color: #333;
     line-height: 1.6;
     transition: background 0.3s, color 0.3s;
+    overflow-x: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
 }
 
 body.dark-mode {
@@ -17,20 +27,32 @@ body.dark-mode {
     color: #e0e0e0;
 }
 
+:root {
+    --sidebar-width: 220px;
+}
+
 .dashboard {
-    display: flex;
     min-height: 100vh;
+    min-height: 100dvh;
+    padding-left: var(--sidebar-width);
+    width: 100%;
+    overflow-x: hidden;
+    display: flex;
+    flex: 1;
 }
 
 .sidebar {
-    width: 220px;
+    width: var(--sidebar-width);
     background: #333333;
     color: #fff;
     padding: 16px;
     position: fixed;
+    top: 0;
+    left: 0;
     height: 100%;
+    overflow-y: auto;
     box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
-    transition: width 0.3s;
+    transition: none;
 }
 
 .sidebar h2 {
@@ -65,13 +87,24 @@ body.dark-mode {
 }
 
 .main-content {
-    margin-left: 220px;
-    padding: 24px;
-    width: calc(100% - 220px);
-    transition: margin-left 0.3s, width 0.3s;
+    margin-left: 0;
+    padding: 16px 24px 0;
+    width: 100%;
+    min-width: 0;
+    max-width: calc(100vw - var(--sidebar-width));
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    min-height: 100dvh;
+    flex: 1;
+}
+
+.main-content > :first-child {
+    margin-top: 0;
+}
+
+.main-content > :last-child {
+    margin-bottom: 0;
 }
 
 .header {
@@ -263,12 +296,13 @@ body.dark-mode .footer-bottom {
 }
 
 .dashboard .main-content .footer-bottom {
-    margin: auto -24px -24px;
+    margin: 24px -24px 0;
     padding: 16px 24px;
     background: #333333;
     color: rgba(255, 255, 255, 0.85);
     font-size: 0.9rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: auto;
 }
 
 body.dark-mode .dashboard .main-content .footer-bottom {
@@ -278,8 +312,12 @@ body.dark-mode .dashboard .main-content .footer-bottom {
 }
 
 @media (max-width: 768px) {
+    :root {
+        --sidebar-width: 68px;
+    }
+
     .sidebar {
-        width: 68px;
+        width: var(--sidebar-width);
     }
 
     .sidebar h2, .sidebar a span {
@@ -291,8 +329,9 @@ body.dark-mode .dashboard .main-content .footer-bottom {
     }
 
     .main-content {
-        margin-left: 68px;
-        width: calc(100% - 68px);
+        margin-left: 0;
+        width: 100%;
+        max-width: calc(100vw - var(--sidebar-width));
     }
 }
 .card {

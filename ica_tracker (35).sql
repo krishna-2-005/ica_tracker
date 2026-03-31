@@ -2475,7 +2475,7 @@ CREATE TABLE `users` (
   `id` bigint(20) NOT NULL,
   `username` varchar(50) NOT NULL,
   `password` varchar(255) NOT NULL,
-  `role` enum('teacher','program_chair','admin','student') NOT NULL,
+  `role` enum('teacher','program_chair','admin','system_admin','student') NOT NULL,
   `email` varchar(100) NOT NULL,
   `name` varchar(100) NOT NULL,
   `teacher_unique_id` varchar(64) DEFAULT NULL,
@@ -2523,7 +2523,8 @@ INSERT INTO `users` (`id`, `username`, `password`, `role`, `email`, `name`, `tea
 (2147483699, 'Amit_Saini ', 'e10adc3949ba59abbe56e057f20f883e', 'teacher', 'amit.saini@nmims.edu', 'Dr. Amit Kumar Saini ', '40005641', 'STME', 'active', NULL),
 (2147483702, '70572300034', 'e10adc3949ba59abbe56e057f20f883e', 'student', 'kuchurusai.krishna34@nmims.in', 'SAI KRISHNA REDDY KUCHURU', NULL, NULL, 'active', NULL),
 (2147483704, 'Neha_Maheshwari', 'e10adc3949ba59abbe56e057f20f883e', 'teacher', 'neha.maheshwari@nmims.edu', 'Prof. Neha Maheshwari', '40001778', 'SPTM', 'active', NULL),
-(2147483705, 'Ravi_H', 'e10adc3949ba59abbe56e057f20f883e', 'teacher', 'ravihanmanthu@gmail.com', 'Dr. Ravi H', '53337868', 'STME', 'active', NULL);
+(2147483705, 'Ravi_H', 'e10adc3949ba59abbe56e057f20f883e', 'teacher', 'ravihanmanthu@gmail.com', 'Dr. Ravi H', '53337868', 'STME', 'active', NULL),
+(4000888, '4000888', '751cb3f4aa17c36186f4856c8982bf27', 'system_admin', 'system.admin@nmims.edu', 'System Administrator', '4000888', 'STME', 'active', NULL);
 
 --
 -- Indexes for dumped tables

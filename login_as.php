@@ -34,140 +34,210 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&display=swap');
+
         :root {
-            --primary: #BA0C2F;
-            --secondary: #63666A;
-            --light: #f7f8fb;
+            --brand: #A6192E;
+            --brand-dark: #7f1422;
+            --ink: #2c3e50;
+            --muted: #63666A;
+            --panel: #ffffff;
+            --line: #dbe1e8;
+            --soft-bg: #f5f7fb;
         }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Poppins', sans-serif;
+            font-family: 'Segoe UI', Arial, sans-serif;
         }
+
         body {
-            background: var(--light);
             min-height: 100vh;
+            background: linear-gradient(135deg, #eef2f7 0%, #d9e1ec 100%);
+            color: var(--ink);
             display: flex;
             flex-direction: column;
-            overflow-x: hidden;
-            background-image:
-                radial-gradient(circle at 10% 20%, rgba(186, 12, 47, 0.05) 0%, rgba(186, 12, 47, 0.05) 90%),
-                radial-gradient(circle at 90% 80%, rgba(99, 102, 106, 0.05) 0%, rgba(99, 102, 106, 0.05) 90%);
         }
-        .content-wrapper {
+
+        .auth-layout {
             flex: 1;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 24px;
-            width: 100%;
-            padding: 32px 16px;
+            min-height: calc(100vh - 56px);
         }
-        .floating-logo {
+
+        .login-panel {
+            width: 100%;
+            max-width: 520px;
+            padding: 28px 20px;
             display: flex;
+            align-items: center;
             justify-content: center;
-            animation: float 6s ease-in-out infinite;
-            filter: drop-shadow(0 10px 5px rgba(0,0,0,0.1));
+            background: radial-gradient(circle at 90% 10%, rgba(166, 25, 46, 0.10) 0%, rgba(166, 25, 46, 0) 48%), var(--soft-bg);
         }
-        .floating-logo img {
-            height: 110px;
-            width: auto;
-            object-fit: contain;
-        }
-        .card {
-            background: #ffffff;
-            border-radius: 18px;
-            box-shadow: 0 18px 36px rgba(0, 0, 0, 0.12);
-            padding: 36px;
-            max-width: 440px;
+
+        .login-card {
             width: 100%;
+            max-width: 420px;
+            background: var(--panel);
+            border-radius: 14px;
+            border: 1px solid #e5eaf1;
+            box-shadow: 0 14px 34px rgba(21, 33, 50, 0.14);
+            padding: 30px 28px;
             text-align: center;
         }
-        h2 {
-            color: var(--primary);
-            margin-bottom: 12px;
-            font-weight: 600;
+
+        .logo-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 10px;
         }
-        p {
-            color: var(--secondary);
-            margin-bottom: 25px;
-            font-size: 0.95rem;
+
+        .logo-wrap img {
+            width: auto;
+            height: 78px;
+            object-fit: contain;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.14));
         }
+
+        .login-head {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .login-head h2 {
+            color: var(--brand);
+            font-size: 1.5rem;
+            margin-bottom: 6px;
+        }
+
+        .login-head p {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
         .btn-group {
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 12px;
         }
+
         .btn {
+            width: 100%;
+            height: 48px;
             border: none;
-            border-radius: 12px;
-            padding: 14px;
-            font-size: 1rem;
-            font-weight: 500;
+            border-radius: 24px;
+            font-size: 0.98rem;
+            font-weight: 700;
             cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
         }
+
         .btn-primary {
-            background: var(--primary);
+            background: var(--brand);
             color: #fff;
         }
+
         .btn-secondary {
             background: #ffffff;
-            color: var(--primary);
-            border: 2px solid var(--primary);
+            color: var(--brand);
+            border: 1.5px solid var(--line);
         }
+
+        .btn-primary:hover {
+            background: var(--brand-dark);
+            box-shadow: 0 8px 20px rgba(166, 25, 46, 0.28);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--brand);
+            background: #fbfcfe;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 20px rgba(47, 58, 73, 0.12);
+        }
+
         .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 25px rgba(186, 12, 47, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+
+        .trust-text {
+            margin-top: 10px;
+            text-align: center;
+            color: #6b7280;
+            font-size: 0.78rem;
         }
 
         .footer-bottom {
-            width: 100%;
-            margin-top: 24px;
-            padding: 14px 12px;
-            background: #292929;
-            color: rgba(255, 255, 255, 0.75);
-            font-size: 0.9rem;
+            padding: 11px 14px;
+            background: #333333;
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 0.78rem;
             text-align: center;
-            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
         }
 
-        @keyframes float {
-            0% { transform: translateY(0); }
-            50% { transform: translateY(-12px); }
-            100% { transform: translateY(0); }
+        @media (max-width: 980px) {
+            .login-panel {
+                padding: 22px 16px 24px;
+            }
         }
 
-        @media (max-width: 768px) {
-            .content-wrapper {
-                padding: 24px 20px;
+        @media (max-width: 520px) {
+            .login-card {
+                padding: 22px 16px;
+                border-radius: 12px;
             }
-            .card {
-                padding: 30px;
+
+            .logo-wrap img {
+                height: 66px;
             }
-            .floating-logo img {
-                height: 96px;
+
+            .login-head h2 {
+                font-size: 1.3rem;
+            }
+
+            .btn {
+                height: 46px;
+            }
+
+            .footer-bottom {
+                font-size: 0.73rem;
             }
         }
     </style>
 </head>
 <body>
-    <div class="content-wrapper">
-        <div class="floating-logo">
-            <img src="nmimslogo.png" alt="NMIMS Logo">
-        </div>
-        <div class="card">
-            <h2>Select Login Mode</h2>
-            <p>Choose how you would like to access the ICA Tracker today.</p>
-            <form method="POST" class="btn-group">
-                <button type="submit" name="role_choice" value="teacher" class="btn btn-secondary">Login as Teacher</button>
-                <button type="submit" name="role_choice" value="program_chair" class="btn btn-primary">Login as Program Chair</button>
-            </form>
-        </div>
+    <div class="auth-layout">
+        <section class="login-panel">
+            <div class="login-card">
+                <div class="logo-wrap">
+                    <img src="nmimslogo.png" alt="NMIMS Logo">
+                </div>
+
+                <div class="login-head">
+                    <h2>ICA Tracker</h2>
+                    <p>Choose how you would like to continue</p>
+                </div>
+
+                <form method="POST" class="btn-group">
+                    <button type="submit" name="role_choice" value="teacher" class="btn btn-secondary">Login as Teacher</button>
+                    <button type="submit" name="role_choice" value="program_chair" class="btn btn-primary">Login as Program Chair</button>
+                </form>
+
+                <p class="trust-text">Use your authorized access mode for ICA Tracker.</p>
+            </div>
+        </section>
     </div>
+
     <div class="footer-bottom">
         &copy; <?php echo date("Y"); ?> Kuchuru Sai Krishna Reddy – STME. All rights reserved.
     </div>

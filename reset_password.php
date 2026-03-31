@@ -60,80 +60,270 @@ if ($token === '') {
 mysqli_close($conn);
 ?>
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Reset Password</title>
+<title>Reset Password - ICA Tracker</title>
 <link rel="icon" type="image/png" href="nmimsvertical.jpg">
 <link rel="apple-touch-icon" href="nmimsvertical.jpg">
-<link rel="stylesheet" href="ica_tracker.css">
 <style>
-body { min-height: 100vh; }
-.reset-shell {
-    max-width: 560px;
-    margin: 48px auto;
-}
-.reset-card {
-    background: #fff;
-    padding: 24px;
-    border-radius: 12px;
-    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.1);
-}
-.reset-title {
-    font-size: 1.9rem;
-    color: #A6192E;
-    margin-bottom: 12px;
-}
-.msg {
-    margin: 12px 0 18px;
-    color: #34495e;
-    font-weight: 600;
-}
-.reset-form label {
-    margin-top: 10px;
-}
-.reset-actions {
-    margin-top: 14px;
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-.back-link {
-    color: #A6192E;
-    font-weight: 600;
-    text-decoration: none;
-}
-.back-link:hover {
-    text-decoration: underline;
-}
+    @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&display=swap');
+
+    :root {
+        --brand: #A6192E;
+        --brand-dark: #7f1422;
+        --ink: #2c3e50;
+        --muted: #63666A;
+        --line: #dbe1e8;
+        --soft-bg: #f5f7fb;
+    }
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: 'Segoe UI', Arial, sans-serif;
+    }
+
+    body {
+        min-height: 100vh;
+        background: linear-gradient(135deg, #eef2f7 0%, #d9e1ec 100%);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .auth-layout {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 26px 16px;
+    }
+
+    .reset-card {
+        width: min(520px, 100%);
+        background: radial-gradient(circle at 90% 8%, rgba(166, 25, 46, 0.09) 0%, rgba(166, 25, 46, 0) 42%), var(--soft-bg);
+        border: 1px solid rgba(150, 163, 181, 0.3);
+        border-radius: 16px;
+        box-shadow: 0 16px 34px rgba(21, 33, 50, 0.16);
+        padding: 28px 24px 22px;
+    }
+
+    .logo-wrap {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 10px;
+    }
+
+    .logo-wrap img {
+        width: auto;
+        height: 80px;
+        object-fit: contain;
+        filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.12));
+    }
+
+    .head {
+        text-align: center;
+        margin-bottom: 18px;
+    }
+
+    .head h2 {
+        color: var(--brand);
+        font-size: 2rem;
+        margin-bottom: 6px;
+    }
+
+    .head p {
+        color: var(--muted);
+        font-size: 0.95rem;
+        line-height: 1.5;
+    }
+
+    .msg {
+        border: 1px solid #f3c1c7;
+        background: #fdeff1;
+        color: #8a1726;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 14px;
+        font-size: 0.86rem;
+        line-height: 1.4;
+    }
+
+    .msg.success {
+        border-color: #b9e3c9;
+        background: #edf9f1;
+        color: #256f45;
+    }
+
+    .field {
+        margin-bottom: 14px;
+    }
+
+    .field label {
+        display: block;
+        margin-bottom: 6px;
+        color: #374151;
+        font-size: 0.88rem;
+        font-weight: 600;
+    }
+
+    .field input {
+        width: 100%;
+        height: 48px;
+        border-radius: 8px;
+        border: 1.5px solid var(--line);
+        background: #fbfcfe;
+        padding: 0 13px;
+        font-size: 0.95rem;
+        color: var(--ink);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+
+    .field input:focus {
+        border-color: var(--brand);
+        box-shadow: 0 0 0 3px rgba(166, 25, 46, 0.16);
+        outline: none;
+        background: #ffffff;
+    }
+
+    .actions {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .btn {
+        height: 46px;
+        border: none;
+        border-radius: 24px;
+        background: var(--brand);
+        color: #ffffff;
+        font-size: 0.96rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+        padding: 0 24px;
+    }
+
+    .btn:hover {
+        background: var(--brand-dark);
+        box-shadow: 0 8px 20px rgba(166, 25, 46, 0.28);
+        transform: translateY(-1px);
+    }
+
+    .btn:active {
+        transform: translateY(0);
+        box-shadow: none;
+    }
+
+    .link {
+        color: var(--brand);
+        font-weight: 600;
+        text-decoration: none;
+    }
+
+    .link:hover {
+        color: var(--brand-dark);
+        text-decoration: underline;
+    }
+
+    .footer-bottom {
+        padding: 11px 14px;
+        background: #333333;
+        color: rgba(255, 255, 255, 0.82);
+        text-align: center;
+        font-size: 0.78rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    @media (max-width: 520px) {
+        .reset-card {
+            padding: 22px 14px 20px;
+            border-radius: 13px;
+        }
+
+        .logo-wrap img {
+            height: 66px;
+        }
+
+        .head h2 {
+            font-size: 1.55rem;
+        }
+
+        .head p {
+            font-size: 0.9rem;
+        }
+
+        .field input,
+        .btn {
+            height: 46px;
+        }
+
+        .footer-bottom {
+            font-size: 0.73rem;
+        }
+    }
 </style>
 </head>
 <body>
-<div class="reset-shell">
-    <div class="reset-card">
-        <h2 class="reset-title">Reset Password</h2>
-        <p class="msg"><?php echo htmlspecialchars($msg); ?></p>
-        <?php if ($canReset): ?>
-        <form method="POST" class="reset-form">
-            <input type="hidden" name="token" value="<?php echo htmlspecialchars($token); ?>">
-            <label>New password</label>
-            <input type="password" name="password" required>
-            <label>Confirm new password</label>
-            <input type="password" name="confirm_password" required>
-            <div class="reset-actions">
-                <button class="btn" type="submit">Set Password</button>
-                <a class="back-link" href="login.php">Back to Login</a>
+    <main class="auth-layout">
+        <section class="reset-card">
+            <div class="logo-wrap">
+                <img src="nmimslogo.png" alt="NMIMS Logo">
             </div>
-        </form>
-        <?php else: ?>
-        <div class="reset-actions">
-            <a class="back-link" href="forgot_password.php">Request New Reset Link</a>
-            <a class="back-link" href="login.php">Back to Login</a>
-        </div>
-        <?php endif; ?>
+
+            <div class="head">
+                <h2>Reset Password</h2>
+                <p>Create a new secure password to continue using ICA Tracker.</p>
+            </div>
+
+            <?php
+            $hasMessage = trim($msg) !== '';
+            $isSuccessMessage = $hasMessage && (
+                stripos($msg, 'success') !== false ||
+                stripos($msg, 'updated') !== false
+            ) && stripos($msg, 'failed') === false;
+            ?>
+
+            <?php if ($hasMessage): ?>
+                <p class="msg<?php echo $isSuccessMessage ? ' success' : ''; ?>"><?php echo htmlspecialchars($msg); ?></p>
+            <?php endif; ?>
+
+            <?php if ($canReset): ?>
+                <form method="POST" autocomplete="off">
+                    <input type="hidden" name="token" value="<?php echo htmlspecialchars($token); ?>">
+
+                    <div class="field">
+                        <label for="password">New password</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+
+                    <div class="field">
+                        <label for="confirm_password">Confirm new password</label>
+                        <input type="password" id="confirm_password" name="confirm_password" required>
+                    </div>
+
+                    <div class="actions">
+                        <button class="btn" type="submit">Set Password</button>
+                        <a class="link" href="login.php">Back to Login</a>
+                    </div>
+                </form>
+            <?php else: ?>
+                <div class="actions">
+                    <a class="link" href="forgot_password.php">Request New Reset Link</a>
+                    <a class="link" href="login.php">Back to Login</a>
+                </div>
+            <?php endif; ?>
+        </section>
+    </main>
+
+    <div class="footer-bottom">
+        &copy; <?php echo date('Y'); ?> Kuchuru Sai Krishna Reddy - STME. All rights reserved.
     </div>
-</div>
 </body>
 </html>

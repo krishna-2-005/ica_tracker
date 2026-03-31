@@ -81,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (isset($user['status']) && $user['status'] === 'inactive') {
                     $error = 'Your account is deactivated.';
-                } elseif ($user['role'] === 'admin') {
+                } elseif ($user['role'] === 'admin' || $user['role'] === 'system_admin') {
                     $error = 'Please use the dedicated admin login page.';
                 } else {
                     session_regenerate_id(true);
@@ -241,6 +241,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error !== '') {
+    log_activity($conn, [
+        'event_type' => 'login_failed',
+        'event_label' => 'Portal login failed',
+        'description' => 'Failed authentication attempt on main login.',
+        'metadata' => [
+            'identifier_used' => isset($identifier) ? $identifier : null,
+            'error' => $error,
+        ],
+        'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+    ]);
+}
 mysqli_close($conn);
 ?>
 <!DOCTYPE html>
@@ -252,362 +266,463 @@ mysqli_close($conn);
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&display=swap');
 
         :root {
-            --primary: #BA0C2F;
-            --secondary: #63666A;
-            --dark: #2C2A29;
-            --light: #f8f9fa;
-        }
-
-        html, body {
-            height: 100%;
+            --brand: #A6192E;
+            --brand-dark: #7f1422;
+            --ink: #2c3e50;
+            --muted: #63666A;
+            --panel: #ffffff;
+            --line: #dbe1e8;
+            --soft-bg: #f5f7fb;
         }
 
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Poppins', sans-serif;
+            font-family: 'Segoe UI', Arial, sans-serif;
         }
 
         body {
-            background-color: var(--light);
+            min-height: 100vh;
+            background: linear-gradient(135deg, #eef2f7 0%, #d9e1ec 100%);
+            color: var(--ink);
             display: flex;
             flex-direction: column;
-            min-height: 100vh;
-            height: 100vh;
-            overflow-x: hidden;
-            overflow-y: hidden;
-            background-image:
-                radial-gradient(circle at 10% 20%, rgba(186, 12, 47, 0.05) 0%, rgba(186, 12, 47, 0.05) 90%),
-                radial-gradient(circle at 90% 80%, rgba(99, 102, 106, 0.05) 0%, rgba(99, 102, 106, 0.05) 90%);
         }
 
-        .content-wrapper {
+        .auth-layout {
             flex: 1;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 24px;
-            width: 100%;
-            padding: 24px 16px;
-            min-height: 0;
+            min-height: calc(100vh - 56px);
+            padding: 26px 18px;
         }
 
-        .floating-logo {
-            position: static;
-            display: flex;
-            justify-content: center;
-            animation: float 6s ease-in-out infinite;
-            filter: drop-shadow(0 10px 5px rgba(0,0,0,0.1));
-        }
-
-        .floating-logo img {
-            height: 110px;
-            width: auto;
-            object-fit: contain;
-        }
-
-        .container {
-            position: relative;
-            width: 100%;
-            max-width: 420px;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
-            padding: 32px;
-            opacity: 0;
-            transform: translateY(50px);
-            animation: fadeInUp 0.8s 0.4s forwards;
+        .auth-shell {
+            width: min(1120px, 100%);
+            min-height: 620px;
+            display: grid;
+            grid-template-columns: 1.65fr 1fr;
+            background: rgba(245, 248, 252, 0.78);
+            border: 1px solid rgba(150, 163, 181, 0.32);
+            border-radius: 16px;
             overflow: hidden;
+            box-shadow: 0 22px 46px rgba(18, 30, 45, 0.2);
+            backdrop-filter: blur(2px);
         }
 
-        .container::before {
+        .brand-panel {
+            position: relative;
+            padding: 40px 38px 34px;
+            background:
+                linear-gradient(0deg, rgba(28, 33, 41, 0.88), rgba(28, 33, 41, 0.88)),
+                radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 52%),
+                linear-gradient(145deg, #778192 0%, #9fa9ba 100%);
+            color: #f5f7fb;
+            display: flex;
+            align-items: center;
+        }
+
+        .brand-panel::before,
+        .brand-panel::after {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 5px;
-            background: var(--primary);
-            animation: expandLine 1.2s 0.8s forwards;
-            transform-origin: left;
-            transform: scaleX(0);
+            border-radius: 50%;
+            background: radial-gradient(circle at center, rgba(166, 25, 46, 0.12) 0%, rgba(166, 25, 46, 0) 70%);
+            filter: blur(1px);
         }
 
-        .header {
+        .brand-panel::before {
+            width: 280px;
+            height: 280px;
+            top: -120px;
+            right: -90px;
+        }
+
+        .brand-panel::after {
+            width: 240px;
+            height: 240px;
+            bottom: -110px;
+            left: -100px;
+        }
+
+        .brand-inner {
+            position: relative;
+            z-index: 1;
+            max-width: 540px;
+        }
+
+        .brand-tag {
+            display: inline-block;
+            padding: 7px 14px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            color: #f5f7fb;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            margin-bottom: 22px;
+        }
+
+        .brand-panel h1 {
+            color: #ffffff;
+            font-size: 2.15rem;
+            line-height: 1.2;
+            margin-bottom: 14px;
+        }
+
+        .brand-panel p {
+            color: rgba(240, 244, 250, 0.9);
+            font-size: 0.98rem;
+            line-height: 1.6;
+            margin-bottom: 18px;
+        }
+
+        .brand-copy {
+            margin-bottom: 22px;
+        }
+
+        .brand-points {
+            list-style: none;
+            display: grid;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .brand-points li {
+            padding: 11px 13px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-left: 4px solid #d8dde7;
+            color: #f7f9fc;
+            font-size: 0.9rem;
+        }
+
+        .quick-actions {
+            margin-top: 22px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .quick-actions a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 140px;
+            padding: 9px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: var(--brand);
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 0.78rem;
+            font-weight: 700;
+            transition: background 0.2s ease, transform 0.15s ease;
+        }
+
+        .quick-actions a:hover {
+            background: #8f1425;
+            transform: translateY(-1px);
+        }
+
+        .left-meta {
+            margin-top: 18px;
+            border-top: 1px solid rgba(255, 255, 255, 0.22);
+            padding-top: 14px;
+            font-size: 0.86rem;
+            color: rgba(233, 238, 246, 0.9);
+            line-height: 1.5;
+        }
+
+        .login-panel {
+            width: 100%;
+            max-width: none;
+            padding: 32px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at 90% 10%, rgba(166, 25, 46, 0.10) 0%, rgba(166, 25, 46, 0) 48%), var(--soft-bg);
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            background: transparent;
+            border-radius: 0;
+            border: none;
+            box-shadow: none;
+            padding: 0;
+        }
+
+        .logo-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 10px;
+        }
+
+        .logo-wrap img {
+            width: auto;
+            height: 78px;
+            object-fit: contain;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.14));
+        }
+
+        .login-head {
             text-align: center;
             margin-bottom: 20px;
         }
 
-        .header h1 {
-            color: var(--primary);
-            font-size: 28px;
+        .login-head h2 {
+            color: var(--brand);
+            font-size: 1.85rem;
+            margin-bottom: 6px;
+        }
+
+        .login-head p {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .login-error-message {
+            border: 1px solid #f3c1c7;
+            background: #fdeff1;
+            color: #8a1726;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-bottom: 14px;
+            font-size: 0.86rem;
+            line-height: 1.4;
+            display: <?php echo $error ? 'block' : 'none'; ?>;
+        }
+
+        .field {
+            margin-bottom: 14px;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 6px;
+            color: #374151;
+            font-size: 0.86rem;
             font-weight: 600;
-            margin-bottom: 10px;
-            opacity: 0;
-            animation: fadeIn 0.8s 0.6s forwards;
         }
 
-        .header p {
-            color: var(--secondary);
-            font-size: 14px;
-            opacity: 0;
-            animation: fadeIn 0.8s 0.8s forwards;
-        }
-
-        .form-group {
-            position: relative;
-            margin-bottom: 25px;
-            opacity: 0;
-            transform: translateX(-20px);
-            animation: slideIn 0.5s forwards;
-        }
-
-        .form-group:nth-child(1) { animation-delay: 1.0s; }
-        .form-group:nth-child(2) { animation-delay: 1.2s; }
-        .form-group:nth-child(3) { animation-delay: 1.4s; }
-
-        .form-group input, .form-group select {
+        .field input {
             width: 100%;
-            padding: 15px 20px;
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            font-size: 16px;
-            color: var(--dark);
-            transition: all 0.3s;
-            background-color: rgba(255, 255, 255, 0.9);
-            appearance: none;
-            -webkit-appearance: none;
+            height: 48px;
+            border-radius: 8px;
+            border: 1.5px solid var(--line);
+            background: #fbfcfe;
+            padding: 0 13px;
+            font-size: 0.94rem;
+            color: var(--ink);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
         }
 
-        .form-group select {
-            cursor: pointer;
-        }
-
-        .form-group input:focus, .form-group select:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(186, 12, 47, 0.2);
+        .field input:focus {
+            border-color: var(--brand);
+            box-shadow: 0 0 0 3px rgba(166, 25, 46, 0.16);
             outline: none;
+            background: #ffffff;
         }
 
-        .form-group label {
-            position: absolute;
-            top: 15px;
-            left: 20px;
-            color: var(--secondary);
-            font-size: 16px;
-            font-weight: 300;
-            transition: all 0.3s;
-            pointer-events: none;
-            background: white;
-            padding: 0 5px;
-        }
-
-        .form-group input:focus + label,
-        .form-group input:not(:placeholder-shown) + label,
-        .form-group select:focus + label,
-        .form-group select:not([value=""]) + label {
-            top: -10px;
-            left: 15px;
-            font-size: 12px;
-            color: var(--primary);
-            background: white;
-        }
-
-        .btn {
+        .btn-login {
             width: 100%;
-            padding: 15px;
-            background: var(--primary);
-            color: white;
+            height: 48px;
             border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 500;
+            border-radius: 24px;
+            background: var(--brand);
+            color: #ffffff;
+            font-size: 0.98rem;
+            font-weight: 700;
             cursor: pointer;
-            transition: all 0.3s;
-            margin-top: 10px;
-            opacity: 0;
-            transform: translateY(20px);
-            animation: fadeInUp 0.8s 1.6s forwards;
-            position: relative;
-            overflow: hidden;
+            transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+            margin-top: 4px;
         }
 
-        .btn:hover {
-            background: #9a0a27;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(186, 12, 47, 0.3);
+        .btn-login:hover {
+            background: var(--brand-dark);
+            box-shadow: 0 8px 20px rgba(166, 25, 46, 0.28);
+            transform: translateY(-1px);
         }
 
-        .btn:active {
+        .btn-login:active {
             transform: translateY(0);
+            box-shadow: none;
         }
 
-        .btn::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 5px;
-            height: 5px;
-            background: rgba(255, 255, 255, 0.5);
-            opacity: 0;
-            border-radius: 100%;
-            transform: scale(1, 1) translate(-50%);
-            transform-origin: 50% 50%;
-        }
-
-        .btn:focus:not(:active)::after {
-            animation: ripple 1s ease-out;
+        .trust-text {
+            margin-top: 10px;
+            text-align: center;
+            color: #6b7280;
+            font-size: 0.78rem;
         }
 
         .signup-link {
             text-align: center;
-            margin-top: 16px;
-            opacity: 0;
-            animation: fadeIn 0.8s 1.8s forwards;
-        }
-
-        .signup-link p {
-            color: var(--secondary);
-            font-size: 14px;
-            display: inline-block;
-            margin-right: 5px;
+            margin-top: 14px;
         }
 
         .signup-link a {
-            color: var(--primary);
+            color: var(--brand);
             font-weight: 600;
+            font-size: 0.9rem;
             text-decoration: none;
-            position: relative;
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 5px;
-            transition: all 0.3s;
         }
 
         .signup-link a:hover {
-            background-color: rgba(186, 12, 47, 0.1);
-            transform: translateY(-2px);
-        }
-
-        .signup-link a:active {
-            transform: translateY(0);
+            color: var(--brand-dark);
+            text-decoration: underline;
         }
 
         .footer-bottom {
-            width: 100%;
+            padding: 11px 14px;
+            background: #333333;
+            color: rgba(255, 255, 255, 0.82);
             text-align: center;
-            margin-top: 24px;
-            padding: 14px 12px;
-            background: #292929;
-            color: rgba(255, 255, 255, 0.75);
-            font-size: 0.9rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 0.78rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
         }
 
-        .particles {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
+        @media (max-width: 980px) {
+            .auth-shell {
+                grid-template-columns: 1fr;
+                min-height: auto;
+            }
+
+            .brand-panel {
+                padding: 26px 20px 22px;
+            }
+
+            .login-panel {
+                padding: 22px 16px 24px;
+            }
         }
 
-        .particle {
-            position: absolute;
-            background: var(--primary);
-            border-radius: 50%;
-            opacity: 0;
-        }
+        @media (max-width: 520px) {
+            .brand-panel {
+                padding: 24px 16px;
+            }
 
-        .login-error-message {
-            color: #d32f2f;
-            text-align: center;
-            font-size: 14px;
-            margin-bottom: 15px;
-            font-weight: 500;
-            display: <?php echo $error ? 'block' : 'none'; ?>;
-        }
+            .brand-tag {
+                margin-bottom: 14px;
+            }
 
-        @keyframes float {
-            0% { transform: translateY(0px); }
-            50% { transform: translateY(-15px); }
-            100% { transform: translateY(0px); }
-        }
+            .brand-panel h1 {
+                font-size: 1.5rem;
+                margin-bottom: 10px;
+            }
 
-        @keyframes fadeInUp {
-            to { opacity: 1; transform: translateY(0); }
-        }
+            .brand-panel p {
+                font-size: 0.9rem;
+                margin-bottom: 16px;
+            }
 
-        @keyframes fadeIn {
-            to { opacity: 1; }
-        }
+            .brand-points li {
+                font-size: 0.84rem;
+                padding: 10px 11px;
+            }
 
-        @keyframes slideIn {
-            to { opacity: 1; transform: translateX(0); }
-        }
+            .quick-actions {
+                gap: 8px;
+            }
 
-        @keyframes expandLine {
-            to { transform: scaleX(1); }
-        }
+            .quick-actions a {
+                min-width: 128px;
+                font-size: 0.75rem;
+            }
 
-        @keyframes ripple {
-            0% { transform: scale(0, 0); opacity: 1; }
-            100% { transform: scale(40, 40); opacity: 0; }
-        }
+            .login-card {
+                padding: 0;
+                border-radius: 0;
+            }
 
-        @keyframes particle-float {
-            0% { transform: translateY(0) rotate(0deg); opacity: 0; }
-            10% { opacity: 1; }
-            100% { transform: translateY(-1000px) rotate(720deg); opacity: 0; }
-        }
+            .logo-wrap img {
+                height: 66px;
+            }
 
-        @media (max-width: 768px) {
-            .content-wrapper { padding: 24px 20px; }
-            .container { padding: 28px; }
-            .floating-logo img { height: 96px; }
+            .login-head h2 {
+                font-size: 1.3rem;
+            }
+
+            .field input,
+            .btn-login {
+                height: 46px;
+            }
+
+            .footer-bottom {
+                font-size: 0.73rem;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="content-wrapper">
-        <div class="floating-logo">
-            <img src="nmimslogo.png" alt="NMIMS Logo">
-        </div>
-        <div class="container">
-            <div class="header">
-                <h1>Welcome to NMIMS University</h1>
-                <p>Login to access your dashboard</p>
-                
-            </div>
+    <div class="auth-layout">
+        <div class="auth-shell">
+            <section class="brand-panel">
+                <div class="brand-inner">
+                    <span class="brand-tag">NMIMS ICA Portal</span>
+                    <h1>Welcome to NMIMS University</h1>
+                    <p class="brand-copy">A single place for students and faculty to manage internal assessments, coursework progress, and academic updates with clarity.</p>
 
-            <div class="login-error-message">
-                <?php echo htmlspecialchars($error); ?>
-            </div>
+                    <ul class="brand-points">
+                        <li>Track ICA components, marks, and overall progress in one place.</li>
+                        <li>Receive alerts quickly to avoid missing key academic deadlines.</li>
+                        <li>Access faculty and student workflows through role-based dashboards.</li>
+                    </ul>
 
-            <form id="loginForm" method="POST">
-                <div class="form-group">
-                    <input type="text" id="identifier" name="identifier" placeholder=" " required>
-                    <label for="identifier">ID (SAP ID / Faculty ID)</label>
+                    <div class="quick-actions">
+                        <a href="http://localhost/ica_tracker/index.php#contact">Contact</a>
+                        <a href="index.php">Portal Home</a>
+                    </div>
+
+                    <p class="left-meta">For support, contact your department coordinator or the portal administrator.</p>
                 </div>
+            </section>
 
-                <div class="form-group">
-                    <input type="password" id="password" name="password" placeholder=" " required>
-                    <label for="password">Password</label>
+            <section class="login-panel">
+                <div class="login-card">
+                    <div class="logo-wrap">
+                        <img src="nmimslogo.png" alt="NMIMS Logo">
+                    </div>
+
+                    <div class="login-head">
+                        <h2>Sign In to Continue</h2>
+                        <p>Use your official SAP ID or Faculty ID to access your dashboard.</p>
+                    </div>
+
+                    <div class="login-error-message">
+                        <?php echo htmlspecialchars($error); ?>
+                    </div>
+
+                    <form id="loginForm" method="POST">
+                        <div class="field">
+                            <label for="identifier">ID (SAP ID / Faculty ID)</label>
+                            <input type="text" id="identifier" name="identifier" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="password">Password</label>
+                            <input type="password" id="password" name="password" required>
+                        </div>
+
+                        <button type="submit" class="btn-login">Login</button>
+
+                        <p class="trust-text">Secure academic access for students, faculty, and coordinators.</p>
+
+                        <div class="signup-link">
+                            <a href="forgot_password.php">Forgot Password?</a>
+                        </div>
+                    </form>
                 </div>
-
-                <button type="submit" class="btn">Login</button>
-
-                <div class="signup-link">
-                    <a href="forgot_password.php">Forgot Password?</a>
-                </div>
-            </form>
+            </section>
         </div>
     </div>
 
@@ -615,32 +730,5 @@ mysqli_close($conn);
         &copy; <?php echo date("Y"); ?> Kuchuru Sai Krishna Reddy – STME. All rights reserved.
     </div>
 
-    <div class="particles" id="particles"></div>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const particlesContainer = document.getElementById('particles');
-            const particleCount = 15;
-            for (let i = 0; i < particleCount; i++) { createParticle(); }
-            function createParticle() {
-                const particle = document.createElement('div');
-                particle.classList.add('particle');
-                const size = Math.random() * 8 + 2;
-                const posX = Math.random() * window.innerWidth;
-                const delay = Math.random() * 5;
-                const duration = Math.random() * 15 + 10;
-                const opacity = Math.random() * 0.4 + 0.1;
-                const color = `rgba(${Math.random() > 0.5 ? '186, 12, 47' : '99, 102, 106'}, ${opacity})`;
-                particle.style.width = `${size}px`;
-                particle.style.height = `${size}px`;
-                particle.style.left = `${posX}px`;
-                particle.style.bottom = '-10px';
-                particle.style.background = color;
-                particle.style.animation = `particle-float ${duration}s linear ${delay}s infinite`;
-                particlesContainer.appendChild(particle);
-                setTimeout(() => { particle.remove(); createParticle(); }, duration * 1000);
-            }
-        });
-    </script>
 </body>
 </html> 

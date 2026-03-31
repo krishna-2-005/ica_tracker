@@ -1219,16 +1219,30 @@ $decorateMarkRows($icaMarks);
 
 $atRiskCount = count($programChairAlerts);
 
-$profileDetails = [
-	'SAP ID' => $studentSapId,
-	'Roll Number' => $rollNumber,
-	'Class' => $classLabel,
-	'Section' => $sectionLabel,
-	'Semester' => $semesterLabel !== '' ? $semesterLabel : 'N/A',
-	'School' => $schoolLabel !== '' ? $schoolLabel : 'N/A'
-];
-
 $subjectsCount = count($subjects);
+
+$progressPercent = $academicSummary ? (int)($academicSummary['progress'] ?? 0) : 0;
+$progressPercent = max(0, min(100, $progressPercent));
+$remainingPercent = max(0, 100 - $progressPercent);
+
+// Fetch timetable files for dashboard
+$classTimetables = [];
+$latestTimetable = null;
+if ($classId) {
+	$ttSql = "SELECT file_name, file_path, uploaded_at FROM class_timetables WHERE class_id = ? ORDER BY uploaded_at DESC LIMIT 3";
+	if ($stmtTimetable = mysqli_prepare($conn, $ttSql)) {
+		mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
+		mysqli_stmt_execute($stmtTimetable);
+		$ttRes = mysqli_stmt_get_result($stmtTimetable);
+		while ($row = mysqli_fetch_assoc($ttRes)) {
+			$classTimetables[] = $row;
+		}
+		if ($classTimetables) {
+			$latestTimetable = $classTimetables[0];
+		}
+		mysqli_stmt_close($stmtTimetable);
+	}
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1241,8 +1255,118 @@ $subjectsCount = count($subjects);
 	<link rel="stylesheet" href="ica_tracker.css">
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<style>
+		html, body.student-dashboard { overflow-x: hidden; }
+		body.student-dashboard .dashboard { width: 100%; overflow-x: hidden; }
+		body.student-dashboard .main-content { padding: 12px 16px 16px; }
+		body.student-dashboard .main-content { width: 100% !important; max-width: 100% !important; min-width: 0; }
+		body.student-dashboard .header { margin-bottom: 12px; padding: 12px 16px; }
+		body.student-dashboard .header h2 { font-size: 1.95rem; }
+		body.student-dashboard .header p { font-size: 0.9rem; }
+		body.student-dashboard .sidebar a { padding: 8px 10px; font-size: 0.9rem; }
+		body.student-dashboard .container { max-width: 100%; }
+		body.student-dashboard .dashboard-main-grid {
+			display: grid;
+			grid-template-columns: minmax(0, 2.35fr) minmax(280px, 1fr);
+			gap: 12px;
+			align-items: start;
+		}
+		body.student-dashboard .dashboard-main-col,
+		body.student-dashboard .dashboard-side-col {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+		}
+		body.student-dashboard .dashboard-side-col {
+			position: sticky;
+			top: 12px;
+			align-self: start;
+			max-height: calc(100dvh - 24px);
+			overflow-y: auto;
+			padding-right: 2px;
+		}
+		body.student-dashboard .card { margin-bottom: 0; padding: 8px 10px; border-radius: 8px; }
+		body.student-dashboard .card-grid { gap: 10px; margin-bottom: 0 !important; }
+		body.student-dashboard .stat-card { padding: 8px; }
+		body.student-dashboard .stat-card h3 { font-size: 1.8rem; }
+		body.student-dashboard .stat-card p { font-size: 0.85rem; }
+		body.student-dashboard .stat-card-link {
+			display: block;
+			text-decoration: none;
+			color: inherit;
+		}
+		body.student-dashboard .stat-card-link:hover {
+			text-decoration: none;
+			transform: translateY(-1px);
+		}
+		body.student-dashboard .section-title { font-size: 1.25rem; margin-bottom: 8px; }
+		body.student-dashboard .section-title-sm { font-size: 1rem; }
+		body.student-dashboard .card-header { margin-bottom: 8px; }
+		body.student-dashboard table { margin-bottom: 8px; }
+		body.student-dashboard th,
+		body.student-dashboard td { padding: 6px 8px; font-size: 0.82rem; }
+		body.student-dashboard th { padding: 7px 8px; font-size: 0.8rem; }
+		body.student-dashboard .empty-state { padding: 14px 0; font-size: 0.9rem; }
+		body.student-dashboard .todo-item { padding: 10px 12px; }
+		body.student-dashboard .todo-item-title { font-size: 0.93rem; }
+		body.student-dashboard .todo-item-meta { font-size: 0.8rem; }
+		body.student-dashboard .term-switch-wrapper { margin-bottom: 12px; }
+		body.student-dashboard .term-context-bar { padding: 12px 14px; }
+		body.student-dashboard .table-note { font-size: 0.83rem; }
+		body.student-dashboard .pie-wrap {
+			display: grid;
+			grid-template-columns: minmax(180px, 240px) 1fr;
+			gap: 12px;
+			align-items: center;
+		}
+		body.student-dashboard .pie-canvas-wrap { position: relative; height: 170px; }
+		body.student-dashboard .mini-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+		body.student-dashboard .mini-list li {
+			background: rgba(99, 102, 106, 0.12);
+			padding: 8px 10px;
+			border-radius: 8px;
+			font-size: 0.84rem;
+		}
+		body.student-dashboard .footer-bottom {
+			margin: 12px 0 0;
+			padding: 12px 16px;
+			font-size: 0.82rem;
+			border-radius: 8px;
+		}
+		body.student-dashboard .compact-timetable .todo-item-link {
+			padding: 4px 10px;
+			font-size: 0.76rem;
+			flex-shrink: 0;
+		}
+		body.student-dashboard .compact-timetable .todo-item > div {
+			min-width: 0;
+			flex: 1;
+		}
+		body.student-dashboard .compact-timetable .todo-item-title {
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		@media (max-width: 1100px) {
+			body.student-dashboard .dashboard-main-grid { grid-template-columns: 1fr; }
+			body.student-dashboard .pie-wrap { grid-template-columns: 1fr; }
+			body.student-dashboard .dashboard-side-col { order: -1; }
+			body.student-dashboard .dashboard-side-col {
+				position: static;
+				max-height: none;
+				overflow: visible;
+				padding-right: 0;
+			}
+		}
+		@media (max-width: 768px) {
+			body.student-dashboard .main-content { padding: 10px; }
+			body.student-dashboard .header { padding: 10px 12px; }
+			body.student-dashboard .header h2 { font-size: 1.8rem; }
+			body.student-dashboard .card-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+		}
+	</style>
 </head>
-<body>
+<body class="student-dashboard">
 	<div class="dashboard">
 		<div class="sidebar">
 			<h2>ICA Tracker</h2>
@@ -1274,135 +1398,116 @@ $subjectsCount = count($subjects);
 				'fallback_semester' => $semesterLabel,
 			]); ?>
 			<div class="container">
-				<div class="card-grid">
-					<div class="card stat-card">
-						<span class="stat-label">Overall performance</span>
-						<h3><?php echo $performanceStats['overall']; ?>%</h3>
-						<p><?php echo $performanceStats['graded']; ?> components evaluated so far.</p>
-					</div>
-					<div class="card stat-card<?php echo $atRiskCount > 0 ? '' : ' success'; ?>">
-						<span class="stat-label">At-risk subjects</span>
-						<h3><?php echo $atRiskCount; ?></h3>
-						<p><?php echo $atRiskCount > 0 ? 'Review the alerts below for action items.' : 'All subjects are currently on track.'; ?></p>
-					</div>
-					<div class="card stat-card secondary">
-						<span class="stat-label">Subjects enrolled</span>
-						<h3><?php echo $subjectsCount; ?></h3>
-						<p><?php echo $pendingAssignmentCount; ?> assignments pending.</p>
-					</div>
-					<div class="card stat-card success">
-						<span class="stat-label">Assignments completed</span>
-						<h3><?php echo $completedAssignmentCount; ?></h3>
-						<p>Keep going—stay ahead of deadlines!</p>
-					</div>
-					<?php if ($academicSummary): ?>
-					<div class="card stat-card">
-						<span class="stat-label">Term progress</span>
-						<h3><?php echo $academicSummary['progress']; ?>%</h3>
-						<p><?php echo htmlspecialchars($academicSummary['term']); ?><br><?php echo $academicSummary['days_remaining']; ?> days remaining.</p>
-					</div>
-					<?php endif; ?>
-				</div>
-
-					<div class="card">
-						<div class="card-header subject-comparison-header">
-							<h3 class="section-title">To-Do List</h3>
-							<a class="card-quick-link" href="view_assignment_marks.php">View all assignments</a>
+				<div class="dashboard-main-grid">
+					<div class="dashboard-main-col">
+						<div class="card-grid">
+							<a href="view_marks.php" class="card stat-card stat-card-link" title="Open Marks">
+								<span class="stat-label">Overall performance</span>
+								<h3><?php echo $performanceStats['overall']; ?>%</h3>
+								<p><?php echo $performanceStats['graded']; ?> components evaluated.</p>
+							</a>
+							<a href="subject_comparison.php" class="card stat-card stat-card-link<?php echo $atRiskCount > 0 ? '' : ' success'; ?>" title="Open Subject Comparison">
+								<span class="stat-label">At-risk subjects</span>
+								<h3><?php echo $atRiskCount; ?></h3>
+								<p><?php echo $atRiskCount > 0 ? 'Check announcements.' : 'All subjects on track.'; ?></p>
+							</a>
+							<a href="view_progress.php" class="card stat-card stat-card-link secondary" title="Open Syllabus Progress">
+								<span class="stat-label">Subjects enrolled</span>
+								<h3><?php echo $subjectsCount; ?></h3>
+								<p><?php echo $pendingAssignmentCount; ?> pending.</p>
+							</a>
+							<a href="view_assignment_marks.php" class="card stat-card stat-card-link success" title="Open Assignments">
+								<span class="stat-label">Assignments completed</span>
+								<h3><?php echo $completedAssignmentCount; ?></h3>
+								<p>Keep going.</p>
+							</a>
 						</div>
-						<?php if (!empty($todoAssignments)): ?>
-						<ul class="todo-list">
-							<?php foreach ($todoAssignments as $todo): ?>
-							<li class="todo-item<?php echo !empty($todo['todo_is_overdue']) ? ' overdue' : ''; ?>">
-								<div>
-									<div class="todo-item-title"><?php echo htmlspecialchars($todo['title'] ?? 'Untitled Assignment'); ?></div>
-									<div class="todo-item-meta">
-										<?php echo htmlspecialchars($todo['subject_name_display'] ?? ($todo['subject_name'] ?? ($todo['subject'] ?? 'Subject TBD'))); ?>
-										· <?php echo htmlspecialchars($todo['status_label'] ?? 'Pending'); ?>
-										<?php if (!empty($todo['todo_deadline_label'])): ?>
-											· Due <?php echo htmlspecialchars($todo['todo_deadline_label']); ?>
-											<?php if (!empty($todo['todo_deadline_hint'])): ?> (<?php echo htmlspecialchars($todo['todo_deadline_hint']); ?>)<?php endif; ?>
-										<?php endif; ?>
-									</div>
+
+						<div class="card">
+							<h3 class="section-title">Academic Snapshot</h3>
+							<div class="pie-wrap">
+								<div class="pie-canvas-wrap">
+									<canvas id="academicProgressPie"></canvas>
 								</div>
-								<a class="todo-item-link" href="view_assignment_marks.php?focus=<?php echo (int)($todo['id'] ?? 0); ?>#assignment-<?php echo (int)($todo['id'] ?? 0); ?>">Open</a>
-							</li>
-							<?php endforeach; ?>
-						</ul>
-						<?php else: ?>
-						<div class="empty-state">No tasks pending—enjoy the momentum.</div>
-						<?php endif; ?>
-					</div>
-
-				<div class="card" style="border-left:4px solid #A6192E;">
-					<h3 class="section-title">Alerts from Program Chair</h3>
-					<?php if (!empty($programChairAlerts)): ?>
-						<div class="info-list" style="grid-template-columns: 1fr;">
-							<?php foreach ($programChairAlerts as $alert): ?>
-							<div class="info-row" style="background: rgba(166, 25, 46, 0.08);">
-								<p style="margin:0 0 4px; font-size:0.85rem; color:#A6192E; text-transform:uppercase; letter-spacing:0.05em;">Subject</p>
-								<p style="margin:0 0 6px; font-size:1rem; color:#2c3e50; font-weight:700;"><?php echo htmlspecialchars($alert['subject']); ?></p>
-								<p style="margin:0; font-size:0.9rem; color:#444; line-height:1.4;"><?php echo htmlspecialchars($alert['message']); ?></p>
+								<ul class="mini-list">
+									<li><strong>Term:</strong> <?php echo $academicSummary ? htmlspecialchars($academicSummary['term']) : 'Current Semester'; ?></li>
+									<li><strong>Progress:</strong> <?php echo $progressPercent; ?>%</li>
+									<li><strong>Remaining:</strong> <?php echo $remainingPercent; ?>%</li>
+									<li><strong>Assignments:</strong> <?php echo $completedAssignmentCount; ?> done, <?php echo $pendingAssignmentCount; ?> pending</li>
+								</ul>
 							</div>
-							<?php endforeach; ?>
 						</div>
-					<?php else: ?>
-						<div class="empty-state">You're all caught up—no alerts from the program chair right now.</div>
-					<?php endif; ?>
-				</div>
+					</div>
 
-				<div class="card">
-					<h3 class="section-title">Profile Overview</h3>
-					<div class="info-list">
-						<?php foreach ($profileDetails as $label => $value): ?>
-							<div class="info-row">
-								<dt><?php echo htmlspecialchars($label); ?></dt>
-								<dd><?php echo htmlspecialchars($value); ?></dd>
+					<div class="dashboard-side-col">
+						<div class="card">
+							<div class="card-header subject-comparison-header">
+								<h3 class="section-title">To-Do List</h3>
+								<a class="card-quick-link" href="view_assignment_marks.php">View all</a>
 							</div>
-						<?php endforeach; ?>
+							<?php if (!empty($todoAssignments)): ?>
+							<ul class="todo-list">
+								<?php foreach ($todoAssignments as $todo): ?>
+								<li class="todo-item<?php echo !empty($todo['todo_is_overdue']) ? ' overdue' : ''; ?>">
+									<div>
+										<div class="todo-item-title"><?php echo htmlspecialchars($todo['title'] ?? 'Untitled Assignment'); ?></div>
+										<div class="todo-item-meta">
+											<?php echo htmlspecialchars($todo['subject_name_display'] ?? ($todo['subject_name'] ?? ($todo['subject'] ?? 'Subject TBD'))); ?>
+											· <?php echo htmlspecialchars($todo['status_label'] ?? 'Pending'); ?>
+										</div>
+									</div>
+								</li>
+								<?php endforeach; ?>
+							</ul>
+							<?php else: ?>
+							<div class="empty-state">No tasks pending right now.</div>
+							<?php endif; ?>
+						</div>
+
+						<div class="card" style="border-left:4px solid #A6192E;">
+							<h3 class="section-title">Announcements</h3>
+							<?php if (!empty($programChairAlerts)): ?>
+							<div class="info-list" style="grid-template-columns: 1fr;">
+								<?php foreach ($programChairAlerts as $alert): ?>
+								<div class="info-row" style="background: rgba(166, 25, 46, 0.08);">
+									<p style="margin:0 0 2px; font-size:0.78rem; color:#A6192E; text-transform:uppercase; letter-spacing:0.04em;">Subject</p>
+									<p style="margin:0 0 4px; font-size:0.9rem; color:#2c3e50; font-weight:700;"><?php echo htmlspecialchars($alert['subject']); ?></p>
+									<p style="margin:0; font-size:0.82rem; color:#444; line-height:1.35;"><?php echo htmlspecialchars($alert['message']); ?></p>
+								</div>
+								<?php endforeach; ?>
+							</div>
+							<?php else: ?>
+							<div class="empty-state">No new announcements.</div>
+							<?php endif; ?>
+						</div>
+
+						<div class="card compact-timetable">
+							<div class="card-header subject-comparison-header">
+								<h3 class="section-title">Latest Timetable</h3>
+								<a class="card-quick-link" href="view_timetable.php">View all</a>
+							</div>
+							<?php if (!empty($classTimetables)): ?>
+							<ul class="todo-list">
+								<?php foreach ($classTimetables as $file): ?>
+									<?php $uploadedLabel = !empty($file['uploaded_at']) ? date('d M Y', strtotime($file['uploaded_at'])) : 'N/A'; ?>
+									<li class="todo-item">
+										<div>
+											<div class="todo-item-title" title="<?php echo htmlspecialchars($file['file_name'] ?? 'Timetable'); ?>"><?php echo htmlspecialchars($file['file_name'] ?? 'Timetable'); ?></div>
+											<div class="todo-item-meta">Uploaded <?php echo htmlspecialchars($uploadedLabel); ?></div>
+										</div>
+										<a class="todo-item-link" href="<?php echo htmlspecialchars($file['file_path']); ?>" download>Download</a>
+									</li>
+								<?php endforeach; ?>
+							</ul>
+							<?php else: ?>
+							<div class="empty-state">No timetable uploaded yet.</div>
+							<?php endif; ?>
+						</div>
 					</div>
 				</div>
 
-			<?php if ($academicSummary): ?>
 			<div class="card">
-				<h3 class="section-title">Academic Term Timeline</h3>
-				<div class="info-list" style="margin-bottom: 16px;">
-					<div class="info-row">
-						<dt>Term</dt>
-						<dd><?php echo htmlspecialchars($academicSummary['term']); ?></dd>
-					</div>
-					<div class="info-row">
-						<dt>Starts</dt>
-						<dd><?php echo date('d M Y', strtotime($academicSummary['start'])); ?></dd>
-					</div>
-					<div class="info-row">
-						<dt>Ends</dt>
-						<dd><?php echo date('d M Y', strtotime($academicSummary['end'])); ?></dd>
-					</div>
-				</div>
-				<div class="progress-wrapper">
-					<div class="progress-bar">
-						<span style="width: <?php echo min(100, max(0, (int)$academicSummary['progress'])); ?>%"></span>
-					</div>
-				</div>
-				<p class="table-note">You have <?php echo $academicSummary['days_remaining']; ?> days left in this term.</p>
-			</div>
-			<?php endif; ?>
-
-			<div class="card">
-				<h3 class="section-title">Enrolled Subjects</h3>
-				<?php if (!empty($subjects)): ?>
-					<ul class="pill-list">
-						<?php foreach ($subjects as $subject): ?>
-							<li><?php echo htmlspecialchars($subject['subject_name_display'] ?? $subject['subject_name']); ?></li>
-						<?php endforeach; ?>
-					</ul>
-				<?php else: ?>
-					<div class="empty-state">Your subjects will appear here once assigned.</div>
-				<?php endif; ?>
-			</div>
-
-			<div class="card">
-				<h3 class="section-title">Course Performance Overview</h3>
+				<h3 class="section-title">Course And Faculty Overview</h3>
 				<?php if (!empty($subjectSummaries)): ?>
 					<div class="table-responsive">
 						<table>
@@ -1412,7 +1517,6 @@ $subjectsCount = count($subjects);
 									<th class="text-left">Faculty</th>
 									<th>ICA Marks</th>
 									<th>Status</th>
-									<th>Last Update</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -1423,18 +1527,17 @@ $subjectsCount = count($subjects);
 										<td>
 											<?php echo htmlspecialchars($summary['marks_label']); ?>
 											<?php if ($summary['percentage_label'] !== '—'): ?>
-												<div class="text-muted">Avg <?php echo htmlspecialchars($summary['percentage_label']); ?></div>
+												<div class="text-muted"><?php echo htmlspecialchars($summary['percentage_label']); ?></div>
 											<?php endif; ?>
 										</td>
 										<td><span class="<?php echo htmlspecialchars($summary['status_class']); ?>"><?php echo htmlspecialchars($summary['status_label']); ?></span></td>
-										<td><?php echo htmlspecialchars($summary['last_update']); ?></td>
 									</tr>
 								<?php endforeach; ?>
 							</tbody>
 						</table>
 					</div>
 				<?php else: ?>
-					<div class="empty-state">Once ICA evaluations are recorded, you'll see each course's status here.</div>
+					<div class="empty-state">Overview data appears once subjects and faculty assignments are available.</div>
 				<?php endif; ?>
 			</div>
 
@@ -1471,208 +1574,8 @@ $subjectsCount = count($subjects);
 		</div>
 		<?php endif; ?>
 
-			<div class="card">
-				<h3 class="section-title">Recent ICA Updates</h3>
-				<?php if (!empty($recentMarks)): ?>
-					<div class="table-responsive">
-						<table>
-							<thead>
-								<tr>
-									<th class="text-left">Subject</th>
-									<th class="text-left">Component</th>
-									<th>Marks</th>
-									<th>Updated</th>
-								</tr>
-							</thead>
-							<tbody>
-								<?php foreach ($recentMarks as $item): ?>
-									<tr>
-										<td class="text-left"><?php echo htmlspecialchars($item['subject_name_display'] ?? $item['subject_name']); ?></td>
-										<?php
-											$instanceNumber = isset($item['instance_number']) ? (int)$item['instance_number'] : null;
-											$componentLabel = $item['component_name'] ?? '';
-											if ($instanceNumber !== null && $instanceNumber > 0) {
-												$componentLabel = rtrim($componentLabel) . ' ' . $instanceNumber;
-											}
-										?>
-										<td class="text-left"><?php echo htmlspecialchars($componentLabel); ?></td>
-										<td>
-											<?php
-												if ($item['marks'] !== null) {
-													$display = $item['marks_display'] ?? $formatScoreLabel((float)$item['marks']);
-													echo htmlspecialchars($display ?? '');
-												} else {
-													echo 'Pending';
-												}
-											?>
-										</td>
-										<td><?php echo $item['updated_at'] ? date('d M Y', strtotime($item['updated_at'])) : '—'; ?></td>
-									</tr>
-								<?php endforeach; ?>
-							</tbody>
-						</table>
-					</div>
-				<?php else: ?>
-					<div class="empty-state">Once new marks are published, the latest updates will be listed here.</div>
-				<?php endif; ?>
-			</div>
 
-			<div class="card">
-				<h3 class="section-title">All ICA Marks</h3>
-				<?php if (!empty($icaMarks)): ?>
-					<div class="table-responsive">
-						<table>
-							<thead>
-								<tr>
-									<th class="text-left">Subject</th>
-									<th class="text-left">Component</th>
-									<th>Marks</th>
-									<th>Updated</th>
-								</tr>
-							</thead>
-							<tbody>
-								<?php foreach ($icaMarks as $mark): ?>
-									<tr>
-										<td class="text-left"><?php echo htmlspecialchars($mark['subject_name_display'] ?? $mark['subject_name']); ?></td>
-										<?php
-											$instanceNumber = isset($mark['instance_number']) ? (int)$mark['instance_number'] : null;
-											$componentLabel = $mark['component_name'] ?? '';
-											if ($instanceNumber !== null && $instanceNumber > 0) {
-												$componentLabel = rtrim($componentLabel) . ' ' . $instanceNumber;
-											}
-										?>
-										<td class="text-left"><?php echo htmlspecialchars($componentLabel); ?></td>
-										<td>
-											<?php
-												if ($mark['marks'] !== null) {
-													$display = $mark['marks_display'] ?? $formatScoreLabel((float)$mark['marks']);
-													echo htmlspecialchars($display ?? '');
-												} else {
-													echo 'Pending';
-												}
-											?>
-										</td>
-										<td><?php echo $mark['updated_at'] ? date('d M Y', strtotime($mark['updated_at'])) : '—'; ?></td>
-									</tr>
-								<?php endforeach; ?>
-							</tbody>
-						</table>
-					</div>
-				<?php else: ?>
-					<div class="empty-state">ICA marks will appear here once evaluations are recorded.</div>
-				<?php endif; ?>
-			</div>
 
-			<div class="card">
-				<h3 class="section-title">Assignments</h3>
-				<?php if (!empty($outstandingAssignments)): ?>
-					<h4 class="section-title-sm">Pending</h4>
-					<div class="table-responsive">
-						<table>
-							<thead>
-								<tr>
-									<th class="text-left">Title</th>
-									<th class="text-left">Subject</th>
-									<th>Deadline</th>
-									<th>Status</th>
-									<th>Marks</th>
-								</tr>
-							</thead>
-							<tbody>
-								<?php foreach ($outstandingAssignments as $assignment): ?>
-									<?php
-										$statusClass = 'status-pill ';
-										switch ($assignment['status_slug']) {
-											case 'submitted':
-												$statusClass .= 'pending';
-												break;
-											case 'late_submitted':
-												$statusClass .= 'warning';
-												break;
-											case 'rejected':
-												$statusClass .= 'danger';
-												break;
-											case 'completed':
-												$statusClass .= 'success';
-												break;
-											default:
-												$statusClass .= 'pending';
-										}
-									?>
-									<tr>
-										<td class="text-left"><?php echo htmlspecialchars($assignment['title']); ?></td>
-										<td class="text-left"><?php echo htmlspecialchars($assignment['subject_name_display'] ?? ($assignment['subject_name'] ?? '—')); ?></td>
-										<td><?php echo $assignment['deadline'] ? date('d M Y', strtotime($assignment['deadline'])) : '—'; ?></td>
-										<td><span class="<?php echo trim($statusClass); ?>"><?php echo htmlspecialchars($assignment['status_label']); ?></span></td>
-										<td><?php echo $assignment['graded_marks'] !== null ? number_format((float)$assignment['graded_marks'], 2) : '—'; ?></td>
-									</tr>
-								<?php endforeach; ?>
-							</tbody>
-						</table>
-					</div>
-				<?php else: ?>
-					<div class="empty-state">No pending assignments. Great job staying ahead!</div>
-				<?php endif; ?>
-
-				<?php if (!empty($completedAssignments)): ?>
-					<h4 class="section-title-sm" style="margin-top: 24px;">Completed</h4>
-					<div class="table-responsive">
-						<table>
-							<thead>
-								<tr>
-									<th class="text-left">Title</th>
-									<th class="text-left">Subject</th>
-									<th>Marks</th>
-									<th>Updated</th>
-								</tr>
-							</thead>
-							<tbody>
-								<?php foreach ($completedAssignments as $assignment): ?>
-									<tr>
-										<td class="text-left"><?php echo htmlspecialchars($assignment['title']); ?></td>
-										<td class="text-left"><?php echo htmlspecialchars($assignment['subject_name_display'] ?? ($assignment['subject_name'] ?? '—')); ?></td>
-										<td><?php echo $assignment['graded_marks'] !== null ? number_format((float)$assignment['graded_marks'], 2) : 'Not graded'; ?></td>
-										<td>
-											<?php
-												$dateValue = $assignment['graded_at'] ?? $assignment['last_submission_at'] ?? $assignment['deadline'];
-												echo $dateValue ? date('d M Y', strtotime($dateValue)) : '—';
-											?>
-										</td>
-									</tr>
-								<?php endforeach; ?>
-							</tbody>
-						</table>
-					</div>
-				<?php endif; ?>
-			</div>
-
-			<div class="card">
-				<h3 class="section-title">Faculty Directory</h3>
-				<?php if (!empty($teacherDirectory)): ?>
-					<div class="table-responsive">
-						<table>
-							<thead>
-								<tr>
-									<th class="text-left">Name</th>
-									<th class="text-left">Email</th>
-									<th class="text-left">Subjects</th>
-								</tr>
-							</thead>
-							<tbody>
-								<?php foreach ($teacherDirectory as $teacher): ?>
-									<tr>
-										<td class="text-left"><?php echo htmlspecialchars($teacher['name_display'] ?? ($teacher['name'] !== '' ? format_person_display($teacher['name']) : 'FACULTY')); ?></td>
-										<td class="text-left"><?php echo htmlspecialchars($teacher['email'] ?: '—'); ?></td>
-										<td class="text-left"><?php echo htmlspecialchars(implode(', ', $teacher['subjects'])); ?></td>
-									</tr>
-								<?php endforeach; ?>
-							</tbody>
-						</table>
-					</div>
-				<?php else: ?>
-					<div class="empty-state">Faculty assignments will appear here once published for your class.</div>
-				<?php endif; ?>
-			</div>
 		</div>
 		<div class="footer-bottom">
 			&copy; <?php echo date("Y"); ?> Kuchuru Sai Krishna Reddy – STME. All rights reserved.
@@ -1680,9 +1583,31 @@ $subjectsCount = count($subjects);
 	</div>
 	</div>
 
-	<?php if (!empty($subjectChartPayload)): ?>
 	<script>
 		document.addEventListener('DOMContentLoaded', function () {
+			var pieCanvas = document.getElementById('academicProgressPie');
+			if (pieCanvas) {
+				new Chart(pieCanvas.getContext('2d'), {
+					type: 'pie',
+					data: {
+						labels: ['Completed', 'Remaining'],
+						datasets: [{
+							data: [<?php echo (int)$progressPercent; ?>, <?php echo (int)$remainingPercent; ?>],
+							backgroundColor: ['rgba(33, 150, 83, 0.85)', 'rgba(166, 25, 46, 0.78)'],
+							borderColor: ['rgba(33, 150, 83, 1)', 'rgba(166, 25, 46, 1)'],
+							borderWidth: 1.2
+						}]
+					},
+					options: {
+						responsive: true,
+						maintainAspectRatio: false,
+						plugins: {
+							legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } }
+						}
+					}
+				});
+			}
+
 			const charts = document.querySelectorAll('canvas[id^="subject-chart-"]');
 			charts.forEach(function (canvas) {
 				var raw = canvas.getAttribute('data-chart');
@@ -1757,7 +1682,6 @@ $subjectsCount = count($subjects);
 			});
 		});
 	</script>
-	<?php endif; ?>
 </body>
 </html>
 

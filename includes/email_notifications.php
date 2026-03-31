@@ -12,6 +12,7 @@ require_once __DIR__ . '/mailer.php';
 const EMAIL_SCENARIO_ASSIGNMENT_CREATED = 'assignment_created';
 const EMAIL_SCENARIO_PROGRAM_ALERT = 'program_alert';
 const EMAIL_SCENARIO_ICA_MARKS_PUBLISHED = 'ica_marks_published';
+const EMAIL_SCENARIO_ICA_MARKS_BULK_PUBLISHED = 'ica_marks_bulk_published';
 const EMAIL_SCENARIO_SUBJECT_ASSIGNMENT = 'subject_assignment';
 const EMAIL_SCENARIO_TIMETABLE_PUBLISHED = 'timetable_published';
 const EMAIL_SCENARIO_PASSWORD_RESET = 'password_reset';
@@ -329,6 +330,78 @@ if (!function_exists('email_notification_build_payload')) {
                 $result['message_text'] = 'Your marks for ' . $componentName . ' in ' . $subjectName . ' are now available.';
                 $result['details_html'] = $details['html'];
                 $result['details_text'] = $details['text'];
+                $result['action_link'] = trim((string)($data['marks_url'] ?? ($appUrl . '/view_marks.php')));
+                $result['button_text'] = 'View Marks';
+                break;
+
+            case EMAIL_SCENARIO_ICA_MARKS_BULK_PUBLISHED:
+                $rows = $data['marks_rows'] ?? [];
+                if (!is_array($rows)) {
+                    $rows = [];
+                }
+
+                $subjectSet = [];
+                $tableRowsHtml = [];
+                $tableRowsText = [];
+
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+
+                    $subjectName = trim((string)($row['subject_name'] ?? 'Subject'));
+                    $componentName = trim((string)($row['component_name'] ?? 'ICA Component'));
+                    $marksObtained = trim((string)($row['marks_obtained'] ?? 'Not recorded'));
+                    $maxMarks = trim((string)($row['max_marks'] ?? ''));
+                    $marksDisplay = $marksObtained;
+                    if ($marksDisplay !== '' && $maxMarks !== '') {
+                        $marksDisplay .= ' / ' . $maxMarks;
+                    }
+
+                    if ($subjectName !== '') {
+                        $subjectSet[$subjectName] = true;
+                    }
+
+                    $tableRowsHtml[] = '<tr>'
+                        . '<td style="padding:8px 10px; border:1px solid #e5d3d6; font-size:13px; color:#1f2937;">' . email_notification_escape_html($subjectName) . '</td>'
+                        . '<td style="padding:8px 10px; border:1px solid #e5d3d6; font-size:13px; color:#1f2937;">' . email_notification_escape_html($componentName) . '</td>'
+                        . '<td style="padding:8px 10px; border:1px solid #e5d3d6; font-size:13px; color:#1f2937; font-weight:600;">' . email_notification_escape_html($marksDisplay !== '' ? $marksDisplay : 'Not recorded') . '</td>'
+                        . '</tr>';
+
+                    $tableRowsText[] = $subjectName . ' | ' . $componentName . ' | ' . ($marksDisplay !== '' ? $marksDisplay : 'Not recorded');
+                }
+
+                $subjectNames = array_keys($subjectSet);
+                $subjectSummary = !empty($subjectNames) ? implode(', ', $subjectNames) : 'your subject(s)';
+                $facultyName = trim((string)($data['faculty_name'] ?? 'Faculty'));
+                $publishedAt = trim((string)($data['published_at'] ?? ''));
+
+                $metaDetails = email_notification_format_detail_block([
+                    ['Subjects', $subjectSummary],
+                    ['Published By', $facultyName],
+                    ['Published At', $publishedAt],
+                ]);
+
+                $tableHtml = '';
+                if (!empty($tableRowsHtml)) {
+                    $tableHtml = '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse; margin-top:12px; border:1px solid #e5d3d6;">'
+                        . '<thead>'
+                        . '<tr style="background:#fdf1f3;">'
+                        . '<th align="left" style="padding:8px 10px; border:1px solid #e5d3d6; font-size:12px; text-transform:uppercase; color:#7a1f2d;">Subject</th>'
+                        . '<th align="left" style="padding:8px 10px; border:1px solid #e5d3d6; font-size:12px; text-transform:uppercase; color:#7a1f2d;">Component</th>'
+                        . '<th align="left" style="padding:8px 10px; border:1px solid #e5d3d6; font-size:12px; text-transform:uppercase; color:#7a1f2d;">Marks</th>'
+                        . '</tr>'
+                        . '</thead>'
+                        . '<tbody>' . implode('', $tableRowsHtml) . '</tbody>'
+                        . '</table>';
+                }
+
+                $result['subject'] = 'ICA Marks Published: Consolidated Update';
+                $result['title'] = 'ICA Marks Updated';
+                $result['message_html'] = 'Your ICA marks have been updated. The uploaded component-wise marks are listed below.';
+                $result['message_text'] = 'Your ICA marks have been updated. The uploaded component-wise marks are listed below.';
+                $result['details_html'] = $metaDetails['html'] . $tableHtml;
+                $result['details_text'] = $metaDetails['text'] . (!empty($tableRowsText) ? PHP_EOL . PHP_EOL . "Subject | Component | Marks" . PHP_EOL . implode(PHP_EOL, $tableRowsText) : '');
                 $result['action_link'] = trim((string)($data['marks_url'] ?? ($appUrl . '/view_marks.php')));
                 $result['button_text'] = 'View Marks';
                 break;
