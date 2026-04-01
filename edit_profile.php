@@ -225,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
-<body<?php echo $role === 'program_chair' ? ' class="program-chair"' : ''; ?>>
+<body<?php echo ($role === 'program_chair' || $role === 'teacher') ? ' class="' . ($role === 'program_chair' ? 'program-chair' : 'teacher-role') . '"' : ''; ?>>
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">

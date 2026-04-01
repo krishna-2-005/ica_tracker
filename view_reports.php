@@ -900,7 +900,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv_summary' && !empty($studen
         }
     </style>
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">

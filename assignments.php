@@ -732,7 +732,7 @@ mysqli_close($conn);
         .section-divider { border-top:1px solid #e1e1e1; margin:24px 0; }
     </style>
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
             <h2>ICA Tracker</h2>

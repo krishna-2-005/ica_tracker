@@ -1608,6 +1608,39 @@ if (isset($_POST['submit_marks'])) {
         .csv-columns .column-chip.mandatory { background: #ffe4ea; border-color: #f1a9b5; color: #a6192e; }
         .csv-columns .column-chip[data-instance]::after { content: attr(data-instance); display: inline-block; margin-left: 6px; font-size: 0.7rem; color: #666; font-weight: 400; }
         .csv-columns-note { margin-top: 6px; color: #666; font-size: 0.78rem; }
+        .subject-select-hidden { display: none; }
+        .subject-button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .subject-button {
+            border: 1px solid #c8ccd4;
+            background: #ffffff;
+            color: #2d313a;
+            border-radius: 999px;
+            padding: 7px 14px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+        }
+        .subject-button:hover {
+            border-color: #A6192E;
+            color: #A6192E;
+            transform: translateY(-1px);
+        }
+        .subject-button.active {
+            background: #A6192E;
+            border-color: #A6192E;
+            color: #ffffff;
+        }
+        .subject-button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
         body.dark-mode .component-checklist { background: #303030; border-color: #555; }
         body.dark-mode .component-option { background: #3c3c3c; border-color: #666; color: #f0f0f0; }
         body.dark-mode .component-option.selected { background: #5a2a36; border-color: #d36; color: #ffdce5; }
@@ -1621,7 +1654,7 @@ if (isset($_POST['submit_marks'])) {
         body.dark-mode .csv-columns-note { color: #d6d6d6; }
     </style>
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
             <h2>ICA Tracker</h2>
@@ -1650,7 +1683,7 @@ if (isset($_POST['submit_marks'])) {
 
                         <div class="form-group">
                             <label>1. Select Subject</label>
-                            <select id="subject_id">
+                            <select id="subject_id" class="subject-select-hidden">
                                 <option value="">-- Select a Subject --</option>
                                 <?php while ($subject = mysqli_fetch_assoc($subjects_result)): ?>
                                     <?php
@@ -1661,6 +1694,7 @@ if (isset($_POST['submit_marks'])) {
                                     <option value="<?php echo $subject['id']; ?>" data-subject-type="<?php echo htmlspecialchars($subjectType); ?>"><?php echo htmlspecialchars($label); ?></option>
                                 <?php endwhile; ?>
                             </select>
+                            <div id="subject_buttons" class="subject-button-group" role="group" aria-label="Assigned subjects"></div>
                         </div>
                         <div class="form-group" id="class-selector-group" style="display:none;">
                             <label>2. Select Class</label>
@@ -1766,6 +1800,7 @@ if (isset($_POST['submit_marks'])) {
 
         document.addEventListener('DOMContentLoaded', function() {
             const subjectSelect = document.getElementById('subject_id');
+            const subjectButtonsContainer = document.getElementById('subject_buttons');
             const componentChecklist = document.getElementById('component_checklist');
             const selectedConfigContainer = document.getElementById('selected-components-config');
             const selectedComponentsPayload = document.getElementById('selected_components_payload');
@@ -1858,6 +1893,44 @@ if (isset($_POST['submit_marks'])) {
             let currentManualComponentId = null;
             let currentMode = 'manual';
             let lastSelectionCount = 0;
+
+            function syncSubjectButtons() {
+                if (!subjectButtonsContainer || !subjectSelect) {
+                    return;
+                }
+                const selectedValue = subjectSelect.value;
+                subjectButtonsContainer.querySelectorAll('.subject-button').forEach(button => {
+                    const isActive = button.dataset.value === selectedValue;
+                    button.classList.toggle('active', isActive);
+                    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                });
+            }
+
+            function initializeSubjectButtons() {
+                if (!subjectButtonsContainer || !subjectSelect) {
+                    return;
+                }
+                subjectButtonsContainer.innerHTML = '';
+                Array.from(subjectSelect.options).forEach(option => {
+                    if (!option.value) {
+                        return;
+                    }
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'subject-button';
+                    button.textContent = option.textContent ? option.textContent.trim() : '';
+                    button.dataset.value = option.value;
+                    button.addEventListener('click', function() {
+                        if (subjectSelect.value === option.value) {
+                            return;
+                        }
+                        subjectSelect.value = option.value;
+                        subjectSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                    subjectButtonsContainer.appendChild(button);
+                });
+                syncSubjectButtons();
+            }
 
             if (saveBtn) {
                 saveBtn.disabled = true;
@@ -2508,6 +2581,7 @@ if (isset($_POST['submit_marks'])) {
 
             if (subjectSelect) {
                 subjectSelect.addEventListener('change', function() {
+                    syncSubjectButtons();
                     currentSubjectId = this.value;
                     if (csvSubjectHidden) {
                         csvSubjectHidden.value = currentSubjectId || '';
@@ -2518,6 +2592,8 @@ if (isset($_POST['submit_marks'])) {
                     loadClassesForSubject(currentSubjectId);
                 });
             }
+
+            initializeSubjectButtons();
 
             if (classSelect) {
                 classSelect.addEventListener('change', function() {

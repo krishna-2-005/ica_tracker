@@ -200,7 +200,9 @@ if ($school_param_provided) {
     $school_filter_display = $pc_school;
 }
 $school_filter = $school_filter_display !== '' ? mysqli_real_escape_string($conn, $school_filter_display) : '';
-$semester_filter = isset($_GET['semester']) ? mysqli_real_escape_string($conn, $_GET['semester']) : '';
+$semester_filter = isset($_GET['semester'])
+    ? mysqli_real_escape_string($conn, $_GET['semester'])
+    : (($activeTerm && isset($activeTerm['semester_number'])) ? mysqli_real_escape_string($conn, (string)$activeTerm['semester_number']) : '');
 $class_filter = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
 // departments_result now aliases whichever field is present to 'school' so the front-end can use the same name
 $school_options = [];
@@ -237,7 +239,7 @@ if ($school_filter === '' && !$school_param_provided && !empty($pc_school)) {
 // 2. OVERVIEW CARDS DATA
 $assignment_where_parts = [];
 if ($activeTermId > 0) {
-    $assignment_where_parts[] = '(c.academic_term_id = ' . $activeTermId . ' OR c.academic_term_id IS NULL)';
+    $assignment_where_parts[] = 'c.academic_term_id = ' . $activeTermId;
 }
 if ($school_filter !== '') {
     $school_clauses = [];
@@ -292,6 +294,22 @@ $assignment_detail_sql = "
     INNER JOIN classes c ON c.id = tsa.class_id
     INNER JOIN subjects s_assign ON s_assign.id = tsa.subject_id
 " . $assignmentWhereClause;
+
+$card_link_params = [];
+if ($school_filter_display !== '') {
+    $card_link_params['school'] = $school_filter_display;
+}
+if ($semester_filter !== '') {
+    $card_link_params['semester'] = $semester_filter;
+}
+if ($class_filter > 0) {
+    $card_link_params['class_id'] = $class_filter;
+}
+$card_link_query = http_build_query($card_link_params);
+$course_progress_link = 'course_progress.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
+$student_at_risk_link = 'student_progress.php?' . http_build_query(array_merge($card_link_params, ['status' => 'at_risk']));
+$alerts_link = 'send_alerts.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
+$week_link = 'manage_academic_calendar.php';
 
 $assignment_detail_res = mysqli_query($conn, $assignment_detail_sql);
 $course_keys = [];
@@ -659,7 +677,7 @@ $teacher_eval_subquery = "SELECT tsa.teacher_id, s.subject_name, ism.student_id,
         $teacher_eval_subquery .= " AND tsa.class_id = $class_filter";
     }
     if ($activeTermId > 0) {
-        $teacher_eval_subquery .= " AND (c_eval.academic_term_id = " . $activeTermId . " OR c_eval.academic_term_id IS NULL)";
+        $teacher_eval_subquery .= " AND c_eval.academic_term_id = " . $activeTermId;
     }
 if ($marksDateCondition) {
     $teacher_eval_subquery .= " AND {$marksDateCondition}";
@@ -894,30 +912,59 @@ foreach ($subject_chart_meta as $subject_id => $meta) {
 }
 
 // 5. PENDING ALERTS
+$pending_alerts_count = 0;
+if (!empty($pc_school) && $user_school_field) {
+    $alerts_count_q = "SELECT COUNT(*) AS total
+        FROM alerts a
+        JOIN users u ON a.teacher_id = u.id
+        WHERE u.{$user_school_field} = ?
+          AND a.status = 'pending'
+          AND u.role = 'teacher'" . $alertsDateClause;
+    $stmt_alert_count = mysqli_prepare($conn, $alerts_count_q);
+    if ($stmt_alert_count) {
+        mysqli_stmt_bind_param($stmt_alert_count, "s", $pc_school);
+        mysqli_stmt_execute($stmt_alert_count);
+        $alert_count_res = mysqli_stmt_get_result($stmt_alert_count);
+        if ($alert_count_res && ($count_row = mysqli_fetch_assoc($alert_count_res))) {
+            $pending_alerts_count = (int)($count_row['total'] ?? 0);
+        }
+        if ($alert_count_res) {
+            mysqli_free_result($alert_count_res);
+        }
+        mysqli_stmt_close($stmt_alert_count);
+    }
+}
+
 // Pending alerts: if we have a pc_school value, filter by it; otherwise show all pending alerts
 if (!empty($pc_school) && $user_school_field) {
-    $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_school_field} = ? AND a.status = 'pending' AND u.role = 'teacher' ORDER BY a.created_at DESC";
+    $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_school_field} = ? AND a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
     $stmt_alerts = mysqli_prepare($conn, $alerts_q);
     mysqli_stmt_bind_param($stmt_alerts, "s", $pc_school);
     mysqli_stmt_execute($stmt_alerts);
     $alerts_result = mysqli_stmt_get_result($stmt_alerts);
     if ($alerts_result && mysqli_num_rows($alerts_result) === 0 && $user_alt_field) {
         mysqli_stmt_close($stmt_alerts);
-        $alerts_q_alt = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_alt_field} = ? AND a.status = 'pending' AND u.role = 'teacher' ORDER BY a.created_at DESC";
+        $alerts_q_alt = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_alt_field} = ? AND a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
         $stmt_alerts_alt = mysqli_prepare($conn, $alerts_q_alt);
         mysqli_stmt_bind_param($stmt_alerts_alt, "s", $pc_school);
         mysqli_stmt_execute($stmt_alerts_alt);
         $alerts_result_alt = mysqli_stmt_get_result($stmt_alerts_alt);
         if ($alerts_result_alt && mysqli_num_rows($alerts_result_alt) > 0) {
             $alerts_result = $alerts_result_alt;
+            $pending_alerts_count = mysqli_num_rows($alerts_result_alt);
         }
         mysqli_stmt_close($stmt_alerts_alt);
+    } elseif ($alerts_result) {
+        $pending_alerts_count = mysqli_num_rows($alerts_result);
     } else {
         mysqli_stmt_close($stmt_alerts);
     }
 } else {
-    $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE a.status = 'pending' AND u.role = 'teacher' ORDER BY a.created_at DESC";
+    $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
     $alerts_result = mysqli_query($conn, $alerts_q);
+    if ($alerts_result) {
+        $pending_alerts_count = mysqli_num_rows($alerts_result);
+    }
 }
 ?>
 
@@ -1030,10 +1077,11 @@ if (!empty($pc_school) && $user_school_field) {
             ]); ?>
             <div class="container">
                 <div class="overview-grid">
-                    <div class="overview-card clickable-card" data-link="course_progress.php"><i class="fas fa-book"></i><div><div class="card-value"><?php echo $total_courses; ?></div><div class="card-label">Total Courses</div></div></div>
-                    <div class="overview-card clickable-card" data-link="course_progress.php"><i class="fas fa-check-double"></i><div><div class="card-value"><?php echo $avg_syllabus; ?>%</div><div class="card-label">Syllabus Covered</div></div></div>
-                    <div class="overview-card" onclick="window.location.href='student_progress.php?status=at_risk'"><i class="fas fa-exclamation-triangle"></i><div><div class="card-value"><?php echo $low_performing_students; ?></div><div class="card-label">Low Performing Students</div></div></div>
-                    <div class="overview-card"><i class="fas fa-calendar-week"></i><div><div class="card-value"><?php echo htmlspecialchars($week_number_display); ?></div><div class="card-label">Current Academic Week</div></div></div>
+                    <div class="overview-card clickable-card" data-link="<?php echo htmlspecialchars($course_progress_link); ?>"><i class="fas fa-book"></i><div><div class="card-value"><?php echo $total_courses; ?></div><div class="card-label">Total Courses (Current Term)</div></div></div>
+                    <div class="overview-card clickable-card" data-link="<?php echo htmlspecialchars($course_progress_link); ?>"><i class="fas fa-check-double"></i><div><div class="card-value"><?php echo $avg_syllabus; ?>%</div><div class="card-label">Syllabus Covered (Current Term)</div></div></div>
+                    <div class="overview-card clickable-card" data-link="<?php echo htmlspecialchars($student_at_risk_link); ?>"><i class="fas fa-exclamation-triangle"></i><div><div class="card-value"><?php echo $low_performing_students; ?></div><div class="card-label">Low Performing Students</div></div></div>
+                    <div class="overview-card clickable-card" data-link="<?php echo htmlspecialchars($alerts_link); ?>"><i class="fas fa-bell"></i><div><div class="card-value"><?php echo $pending_alerts_count; ?></div><div class="card-label">Pending Alerts (Current Term)</div></div></div>
+                    <div class="overview-card clickable-card" data-link="<?php echo htmlspecialchars($week_link); ?>"><i class="fas fa-calendar-week"></i><div><div class="card-value"><?php echo htmlspecialchars($week_number_display); ?></div><div class="card-label">Current Academic Week</div></div></div>
                 </div>
 
                 <div class="card">

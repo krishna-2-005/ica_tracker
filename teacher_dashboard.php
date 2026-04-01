@@ -153,6 +153,28 @@ while ($alert_row = mysqli_fetch_assoc($alerts_result)) {
 }
 mysqli_stmt_close($stmt_alerts);
 
+$pending_alerts_count = 0;
+$pending_alerts_count_query = "SELECT COUNT(*) AS total_pending FROM alerts WHERE teacher_id = ? AND status = 'pending'";
+if ($termStartBound && $termEndBound) {
+    $pending_alerts_count_query .= " AND created_at BETWEEN ? AND ?";
+}
+$stmt_pending_alerts_count = mysqli_prepare($conn, $pending_alerts_count_query);
+if ($stmt_pending_alerts_count) {
+    if ($termStartBound && $termEndBound) {
+        mysqli_stmt_bind_param($stmt_pending_alerts_count, "iss", $teacher_id, $termStartBound, $termEndBound);
+    } else {
+        mysqli_stmt_bind_param($stmt_pending_alerts_count, "i", $teacher_id);
+    }
+    mysqli_stmt_execute($stmt_pending_alerts_count);
+    $pending_alerts_count_result = mysqli_stmt_get_result($stmt_pending_alerts_count);
+    if ($pending_alerts_count_result) {
+        $pending_alerts_count_row = mysqli_fetch_assoc($pending_alerts_count_result);
+        $pending_alerts_count = isset($pending_alerts_count_row['total_pending']) ? (int)$pending_alerts_count_row['total_pending'] : 0;
+        mysqli_free_result($pending_alerts_count_result);
+    }
+    mysqli_stmt_close($stmt_pending_alerts_count);
+}
+
 // Fetch classes for the filter dropdown
 $filter_classes = [];
 $filter_classes_query = "SELECT c.id,
@@ -656,43 +678,44 @@ mysqli_stmt_close($stmt_mid_marks);
     <style>
         .overview-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
         }
         .overview-card {
             background-color: #fff;
             border-radius: 12px;
-            padding: 25px;
+            padding: 14px;
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.05);
         }
         .overview-card i {
-            font-size: 2.5rem;
-            padding: 15px;
+            font-size: 1.3rem;
+            padding: 10px;
             border-radius: 50%;
             color: #fff;
         }
         .overview-card .card-value {
-            font-size: 2rem;
+            font-size: 1.45rem;
             font-weight: bold;
+            line-height: 1.1;
         }
         .overview-card .card-label {
-            font-size: 1rem;
+            font-size: 0.85rem;
             color: #666;
         }
 
         .subject-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(var(--subject-count, 1), minmax(0, 1fr));
+            gap: 12px;
         }
         .subject-card {
             background-color: #ffffff;
             border-radius: 12px;
-            padding: 20px;
+            padding: 12px;
             text-align: center;
             cursor: pointer;
             border: 1px solid #e0e0e0;
@@ -703,13 +726,13 @@ mysqli_stmt_close($stmt_mid_marks);
             box-shadow: 0 8px 25px rgba(166, 25, 46, 0.1);
             border-color: #A6192E;
         }
-        .subject-card i { font-size: 2rem; color: #A6192E; margin-bottom: 10px; }
-        .subject-card .subject-name { font-size: 1.2rem; font-weight: 600; margin-bottom: 5px; }
-        .subject-card .subject-hours { font-size: 0.9rem; color: #666; display: block; }
-        .subject-card .subject-classes { font-size: 0.85rem; color: #444; margin-top: 6px; display: block; }
+        .subject-card i { font-size: 1.3rem; color: #A6192E; margin-bottom: 6px; }
+        .subject-card .subject-name { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; line-height: 1.2; }
+        .subject-card .subject-hours { font-size: 0.78rem; color: #666; display: block; line-height: 1.2; }
+        .subject-card .subject-classes { font-size: 0.75rem; color: #444; margin-top: 5px; display: block; line-height: 1.2; }
         .subject-card .subject-classes--empty { color: #b35c5c; }
-        .subject-card .subject-class-meta { font-size: 0.75rem; color: #777; margin-top: 2px; display: block; }
-    .subject-card .subject-type-badge { display:inline-block; padding:4px 10px; border-radius:12px; background:#fff0f4; color:#b10024; font-size:0.75rem; font-weight:600; margin-bottom:6px; }
+        .subject-card .subject-class-meta { font-size: 0.7rem; color: #777; margin-top: 2px; display: block; }
+    .subject-card .subject-type-badge { display:inline-block; padding:3px 8px; border-radius:12px; background:#fff0f4; color:#b10024; font-size:0.68rem; font-weight:600; margin-bottom:5px; }
         .progress-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin:18px 0; }
         .progress-summary .summary-card { background-color:#ffffff; border:1px solid #dedede; border-radius:10px; padding:16px; text-align:left; }
         .summary-card .summary-label { font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; color:#777; }
@@ -720,10 +743,32 @@ mysqli_stmt_close($stmt_mid_marks);
         .progress-status.status-negative { background:#fff5f5; color:#b10024; border:1px solid #f3d4da; }
         .progress-status.status-neutral { background:#f0f4f7; color:#2c3e50; border:1px solid #d6e0ea; }
         
-        #subject-details-panel { display: none; margin-top: 20px; padding: 20px; border-radius: 12px; background-color: #f8f9fa; }
-        .details-header { font-size: 1.5rem; font-weight: 600; color: #A6192E; margin-bottom: 15px; }
-    .subject-meta { margin-bottom: 8px; font-size: 0.95rem; color: #444; }
-        .details-actions { margin-top: 20px; display: flex; gap: 10px; }
+        #subject-details-panel { display: none; margin-top: 14px; padding: 14px; border-radius: 10px; background-color: #f8f9fa; }
+        .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 10px; }
+        .subject-meta { margin-bottom: 6px; font-size: 0.9rem; color: #444; line-height: 1.35; }
+        #subject-details-panel h5 { font-size: 1rem; margin: 10px 0 8px; }
+        #subject-details-panel p { margin-bottom: 8px; }
+        .details-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+        #subject-details-panel .details-actions .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 14px;
+            font-size: 0.88rem;
+            border-radius: 999px;
+            background: #A6192E;
+            color: #fff;
+            text-decoration: none;
+            transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        #subject-details-panel .details-actions .btn:hover,
+        #subject-details-panel .details-actions .btn:focus-visible {
+            background: #7f1422;
+            color: #fff;
+            text-decoration: none;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(166, 25, 46, 0.25);
+        }
 
         .alerts-card {
             background-color: #fff;
@@ -809,11 +854,14 @@ mysqli_stmt_close($stmt_mid_marks);
             .chart-grid {
                 grid-template-columns: 1fr; /* Stack charts on smaller screens */
             }
+            .subject-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
         }
         /* END: Modified styles */
     </style>
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
             <h2>ICA Tracker</h2>
@@ -856,6 +904,13 @@ mysqli_stmt_close($stmt_mid_marks);
                             <div class="card-label">Current Academic Week</div>
                         </div>
                     </div>
+                    <div class="overview-card">
+                        <i class="fas fa-bell" style="background-color: #A6192E;"></i>
+                        <div>
+                            <div class="card-value"><?php echo $pending_alerts_count; ?></div>
+                            <div class="card-label">Pending Alerts</div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="card">
@@ -864,10 +919,10 @@ mysqli_stmt_close($stmt_mid_marks);
                         <?php if (empty($subjects)): ?>
                             <p>No subjects have been assigned to you yet.</p>
                         <?php else: ?>
-                            <p style="text-align: center; color: #666; font-size: 0.9em; margin-bottom: 20px;">
+                            <p style="text-align: center; color: #666; font-size: 0.85em; margin-bottom: 12px;">
                                 Click on a subject card to view recent updates and manage details.
                             </p>
-                            <div class="subject-grid">
+                            <div class="subject-grid" style="--subject-count: <?php echo max(1, count($subjects)); ?>;">
                                 <?php foreach ($subjects as $subject): ?>
                                      <div class="subject-card"
                                          data-assignment-key="<?php echo htmlspecialchars($subject['assignment_key']); ?>"

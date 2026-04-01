@@ -368,7 +368,7 @@ $columnCount = $timetableHasTermColumn ? 4 : 3;
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
                 <h2>ICA Tracker</h2>

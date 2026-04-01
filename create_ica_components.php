@@ -553,10 +553,45 @@ if ($stmt_subjects) {
         .component-row .other-name-input {
             margin-top: 8px !important; /* Reduced top margin for the 'Other' input */
         }
+        .subject-select-hidden {
+            display: none;
+        }
+        .subject-button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .subject-button {
+            border: 1px solid #c8ccd4;
+            background: #ffffff;
+            color: #2d313a;
+            border-radius: 999px;
+            padding: 7px 14px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+        }
+        .subject-button:hover {
+            border-color: #A6192E;
+            color: #A6192E;
+            transform: translateY(-1px);
+        }
+        .subject-button.active {
+            background: #A6192E;
+            border-color: #A6192E;
+            color: #ffffff;
+        }
+        .subject-button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
         /* END: Styles to optimize form spacing */
     </style>
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
@@ -596,7 +631,7 @@ if ($stmt_subjects) {
                         
                         <div class="form-group">
                             <label>Select Subject</label>
-                            <select id="subject_select" name="subject_id_selector" required>
+                            <select id="subject_select" name="subject_id_selector" class="subject-select-hidden" required>
                                 <option value="">-- Select a Subject --</option>
                                 <?php while ($subject = mysqli_fetch_assoc($subjects_result)) : ?>
                                     <?php
@@ -609,6 +644,7 @@ if ($stmt_subjects) {
                                     </option>
                                 <?php endwhile; ?>
                             </select>
+                            <div id="subject_buttons" class="subject-button-group" role="group" aria-label="Assigned subjects"></div>
                         </div>
 
                         <div class="form-group" id="class-select-group" style="<?php echo $selected_subject_id ? '' : 'display:none;'; ?>">
@@ -711,6 +747,7 @@ if ($stmt_subjects) {
 
         document.addEventListener('DOMContentLoaded', function() {
             const subjectSelect = document.getElementById('subject_select');
+            const subjectButtonsContainer = document.getElementById('subject_buttons');
             const componentsForm = document.getElementById('components-form');
             const editLinkDiv = document.getElementById('edit-components-link');
             const editBtn = document.getElementById('edit-btn');
@@ -744,6 +781,44 @@ if ($stmt_subjects) {
                 'Review 1/project proposal', 'Review 2', 'Progress review/report', 
                 'Final Presentation/viva/report', 'Viva', 'Other'
             ];
+
+            function syncSubjectButtons() {
+                if (!subjectButtonsContainer || !subjectSelect) {
+                    return;
+                }
+                const selectedValue = subjectSelect.value;
+                subjectButtonsContainer.querySelectorAll('.subject-button').forEach(button => {
+                    const isActive = button.dataset.value === selectedValue;
+                    button.classList.toggle('active', isActive);
+                    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                });
+            }
+
+            function initializeSubjectButtons() {
+                if (!subjectButtonsContainer || !subjectSelect) {
+                    return;
+                }
+                subjectButtonsContainer.innerHTML = '';
+                Array.from(subjectSelect.options).forEach(option => {
+                    if (!option.value) {
+                        return;
+                    }
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'subject-button';
+                    button.textContent = option.textContent ? option.textContent.trim() : '';
+                    button.dataset.value = option.value;
+                    button.addEventListener('click', function() {
+                        if (subjectSelect.value === option.value) {
+                            return;
+                        }
+                        subjectSelect.value = option.value;
+                        subjectSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                    subjectButtonsContainer.appendChild(button);
+                });
+                syncSubjectButtons();
+            }
 
             function populateClassOptions(classes, selectedValue) {
                 if (!classSelect) {
@@ -1081,6 +1156,7 @@ if ($stmt_subjects) {
 
             if (subjectSelect) {
                 subjectSelect.addEventListener('change', function() {
+                    syncSubjectButtons();
                     const subjectId = this.value;
                     if (formSubjectIdInput) {
                         formSubjectIdInput.value = subjectId;
@@ -1126,6 +1202,7 @@ if ($stmt_subjects) {
                 if (subjectSelect) {
                     subjectSelect.value = String(initialSubjectId);
                 }
+                syncSubjectButtons();
                 if (formSubjectIdInput) {
                     formSubjectIdInput.value = initialSubjectId;
                 }
@@ -1147,6 +1224,8 @@ if ($stmt_subjects) {
                 populateClassOptions([], '');
                 updateCopySection([], null, null, false);
             }
+
+            initializeSubjectButtons();
 
             function sendScaledAlert(subjectId, totalScaled) {
                 fetch('trigger_scaled_alert.php', {

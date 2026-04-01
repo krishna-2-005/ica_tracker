@@ -3,7 +3,21 @@ require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
 
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'student') {
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: login.php');
+    exit;
+}
+
+$currentRole = (string)$_SESSION['role'];
+if ($currentRole !== 'student') {
+    if ($currentRole === 'teacher') {
+        header('Location: timetable.php');
+        exit;
+    }
+    if ($currentRole === 'program_chair' || $currentRole === 'admin') {
+        header('Location: program_dashboard.php');
+        exit;
+    }
     header('Location: login.php');
     exit;
 }
@@ -120,10 +134,31 @@ $latestUpload = null;
 $fileCount = 0;
 $pageError = '';
 
+$hasTimelineColumn = false;
+$hasBroadcastColumn = false;
+if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?")) {
+    $timelineCol = 'timeline';
+    mysqli_stmt_bind_param($colStmt, 's', $timelineCol);
+    mysqli_stmt_execute($colStmt);
+    $timelineRes = mysqli_stmt_get_result($colStmt);
+    $hasTimelineColumn = $timelineRes && mysqli_num_rows($timelineRes) > 0;
+    mysqli_stmt_close($colStmt);
+}
+if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?")) {
+    $broadcastCol = 'is_broadcast';
+    mysqli_stmt_bind_param($colStmt, 's', $broadcastCol);
+    mysqli_stmt_execute($colStmt);
+    $broadcastRes = mysqli_stmt_get_result($colStmt);
+    $hasBroadcastColumn = $broadcastRes && mysqli_num_rows($broadcastRes) > 0;
+    mysqli_stmt_close($colStmt);
+}
+
 if ($classId === null) {
     $pageError = 'Your student record is missing a class assignment. Please contact the administrator.';
 } else {
-    $ttSql = "SELECT file_name, file_path, uploaded_at, timeline, is_broadcast
+    $timelineSelect = $hasTimelineColumn ? 'timeline' : "'' AS timeline";
+    $broadcastSelect = $hasBroadcastColumn ? 'is_broadcast' : '0 AS is_broadcast';
+    $ttSql = "SELECT file_name, file_path, uploaded_at, {$timelineSelect}, {$broadcastSelect}
               FROM class_timetables
               WHERE class_id = ?
               ORDER BY uploaded_at DESC";

@@ -50,7 +50,7 @@ $responded_alerts_result = mysqli_stmt_get_result($stmt_responded);
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">

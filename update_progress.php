@@ -1071,7 +1071,7 @@ mysqli_stmt_close($stmt_recent);
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
-<body>
+<body class="teacher-role">
     <div class="dashboard">
         <div class="sidebar">
             <h2>ICA Tracker</h2>
@@ -1266,7 +1266,7 @@ mysqli_stmt_close($stmt_recent);
                         </div>
                     </div>
                 </div>
-                <div class="card">
+                <div class="card" style="margin-top: 14px;">
                     <div class="card-header"><h5>Recent Updates</h5></div>
                     <div class="card-body">
                         <table>
@@ -1400,7 +1400,8 @@ mysqli_stmt_close($stmt_recent);
             let lastExtraTotalHours = 0;
             let currentPracticalLabel = 'Practical';
             let practicalFieldsEnabled = true;
-            
+
+
             function countPreviousHolidayWeeks(targetWeek) {
                 let count = 0;
                 Object.keys(submittedWeekStatuses).forEach((weekKey) => {
@@ -2073,7 +2074,9 @@ mysqli_stmt_close($stmt_recent);
             }
 
             if (subjectSelect) {
-                subjectSelect.addEventListener('change', handleSubjectChange);
+                subjectSelect.addEventListener('change', function() {
+                    handleSubjectChange();
+                });
             }
             if (timelineSelect) {
                 timelineSelect.addEventListener('change', function() {
@@ -2130,7 +2133,7 @@ mysqli_stmt_close($stmt_recent);
 
             if (subjectSelect && subjectSelect.options.length === 2 && calendarConfig.calendarAvailable) {
                 subjectSelect.selectedIndex = 1;
-                handleSubjectChange();
+                subjectSelect.dispatchEvent(new Event('change', { bubbles: true }));
             }
 
             function isEvenHours(value) {
