@@ -205,8 +205,8 @@ if ($school_param_provided) {
 }
 $school_filter = $school_filter_display !== '' ? mysqli_real_escape_string($conn, $school_filter_display) : '';
 $semester_filter = isset($_GET['semester'])
-    ? mysqli_real_escape_string($conn, trim((string)$_GET['semester']))
-    : '';
+    ? mysqli_real_escape_string($conn, $_GET['semester'])
+    : (($activeTerm && isset($activeTerm['semester_number'])) ? mysqli_real_escape_string($conn, (string)$activeTerm['semester_number']) : '');
 $class_filter = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
 // departments_result now aliases whichever field is present to 'school' so the front-end can use the same name
 $school_options = [];
@@ -311,7 +311,6 @@ if ($class_filter > 0) {
 }
 $card_link_query = http_build_query($card_link_params);
 $course_progress_link = 'course_progress.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
-$students_page_link = 'student_progress.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
 $student_at_risk_link = 'student_progress.php?' . http_build_query(array_merge($card_link_params, ['status' => 'at_risk']));
 $alerts_link = 'send_alerts.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
 $week_link = 'manage_academic_calendar.php';
@@ -1163,6 +1162,82 @@ foreach ($teacher_subject_pairs as $pair) {
 }
 $teachers_monitored = count($teacher_scope_ids);
 $students_in_scope = 0;
+foreach ($teacher_progress_meta as $meta_by_subject) {
+    if (!is_array($meta_by_subject)) {
+        continue;
+    }
+    foreach ($meta_by_subject as $subject_meta) {
+        if (!is_array($subject_meta)) {
+            continue;
+        }
+        $students_in_scope += (int)($subject_meta['total_students'] ?? 0);
+    }
+}
+
+$below_threshold_courses = 0;
+$no_recent_updates = 0;
+$stale_teacher_ids = [];
+$todayTs = time();
+
+if ($teacher_performance_result) {
+    mysqli_data_seek($teacher_performance_result, 0);
+    while ($metrics_row = mysqli_fetch_assoc($teacher_performance_result)) {
+        $completion_value = isset($metrics_row['avg_completion']) ? (float)$metrics_row['avg_completion'] : 0.0;
+        if ($completion_value + 0.0001 < $syllabus_threshold) {
+            $below_threshold_courses++;
+        }
+
+        $last_updated_raw = isset($metrics_row['last_updated']) ? trim((string)$metrics_row['last_updated']) : '';
+        $teacher_id_metrics = isset($metrics_row['teacher_id']) ? (int)$metrics_row['teacher_id'] : 0;
+        $is_stale = true;
+        if ($last_updated_raw !== '') {
+            $last_ts = strtotime($last_updated_raw);
+            if ($last_ts !== false) {
+                $days_since = ($todayTs - $last_ts) / 86400;
+                $is_stale = $days_since > 7;
+            }
+        }
+        if ($is_stale && $teacher_id_metrics > 0) {
+            $stale_teacher_ids[$teacher_id_metrics] = true;
+        }
+    }
+    $no_recent_updates = count($stale_teacher_ids);
+    mysqli_data_seek($teacher_performance_result, 0);
+}
+
+$low_mid_subjects = 0;
+foreach ($mid_perf_data as $mid_row) {
+    if (!isset($mid_row['mid_avg']) || $mid_row['mid_avg'] === null) {
+        continue;
+    }
+    if ((float)$mid_row['mid_avg'] + 0.0001 < $performance_threshold) {
+        $low_mid_subjects++;
+    }
+}
+
+$dashboard_insights = [];
+if ($below_threshold_courses > 0) {
+    $dashboard_insights[] = $below_threshold_courses . ' mapped course allocations are below the syllabus threshold of ' . (int)round($syllabus_threshold) . '%.';
+}
+if ($low_mid_subjects > 0) {
+    $dashboard_insights[] = $low_mid_subjects . ' subjects have Mid performance below ' . (int)round($performance_threshold) . '%.';
+}
+if ($no_recent_updates > 0) {
+    $dashboard_insights[] = $no_recent_updates . ' teachers have no progress update in the last 7 days.';
+}
+if (empty($dashboard_insights)) {
+    $dashboard_insights[] = 'No high-priority risk signal detected for the current filters.';
+}
+
+$teacher_scope_ids = [];
+foreach ($teacher_subject_pairs as $pair) {
+    $tid = isset($pair['teacher_id']) ? (int)$pair['teacher_id'] : 0;
+    if ($tid > 0) {
+        $teacher_scope_ids[$tid] = true;
+    }
+}
+$teachers_monitored = count($teacher_scope_ids);
+$students_in_scope = 0;
 $students_in_scope_q = "SELECT
         COUNT(DISTINCT CASE
             WHEN TRIM(COALESCE(st.sap_id, '')) <> '' THEN UPPER(TRIM(st.sap_id))
@@ -1248,36 +1323,27 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <link rel="stylesheet" href="ica_tracker.css">
     <style>
-        .sa-stats { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
-        .sa-stat  { min-width:0; background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%); border-radius:10px; border:1px solid #e5e7eb; padding:8px 9px; display:flex; align-items:center; gap:8px; box-shadow:0 1px 4px rgba(0,0,0,.05); text-decoration:none; transition:transform .15s,box-shadow .15s,border-color .15s; }
-        .sa-stat:hover { transform:translateY(-1px); box-shadow:0 4px 10px rgba(166,25,46,.10); border-color:#d9dee7; }
-        .sa-stat-icon { width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0; }
+        .sa-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
+        .sa-stat  { background:#fff; border-radius:7px; border:1px solid #e5e7eb; padding:10px 12px; display:flex; align-items:center; gap:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); text-decoration:none; transition:transform .15s,box-shadow .15s; }
+        .sa-stat:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(166,25,46,.12); }
+        .sa-stat-icon { width:34px;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0; }
         .si-red{ background:rgba(166,25,46,.1); color:#A6192E; }
         .si-blue{ background:rgba(37,99,235,.1); color:#2563eb; }
         .si-amber{ background:rgba(217,119,6,.1); color:#d97706; }
         .si-purple{ background:rgba(124,58,237,.1); color:#7c3aed; }
         .si-green{ background:rgba(22,163,74,.1); color:#16a34a; }
         .si-teal{ background:rgba(13,148,136,.1); color:#0d9488; }
-        .sa-stat-info { min-width:0; }
-        .sa-stat-info h4 { margin:0 0 2px; font-size:.6rem; color:#6b7280; text-transform:uppercase; letter-spacing:.04em; line-height:1.15; }
-        .sa-stat-val { font-size:1.08rem; font-weight:700; color:#111827; line-height:1; }
-        .sa-stat-sub { font-size:.62rem; color:#94a3b8; margin-top:2px; line-height:1.2; }
+        .sa-stat-info h4 { margin:0 0 2px; font-size:.68rem; color:#6b7280; text-transform:uppercase; letter-spacing:.04em; }
+        .sa-stat-val { font-size:1.4rem; font-weight:700; color:#111827; line-height:1; }
+        .sa-stat-sub { font-size:.68rem; color:#9ca3af; margin-top:2px; }
         .section-label { font-size:.72rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.06em; margin:0 0 8px; }
-        .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+        .charts-row { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-bottom:12px; }
         .charts-row2 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px; }
-        @media(max-width:900px){
-            .charts-row,.charts-row2{ grid-template-columns:1fr; }
-            .sa-stats { gap:7px; }
-            .sa-stat { padding:7px 7px; gap:6px; border-radius:9px; }
-            .sa-stat-icon { width:26px; height:26px; font-size:.8rem; }
-            .sa-stat-info h4 { font-size:.54rem; }
-            .sa-stat-val { font-size:.92rem; }
-            .sa-stat-sub { font-size:.56rem; }
-        }
+        @media(max-width:900px){ .charts-row,.charts-row2{ grid-template-columns:1fr; } }
         .chart-card { background:#fff; border-radius:7px; border:1px solid #e5e7eb; padding:10px 13px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
-        .chart-card-title { font-size:1rem; font-weight:700; color:#111827; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
-        .chart-card-title i { color:#A6192E; font-size:.92rem; }
-        .chart-card canvas { max-height:260px; min-height:240px; }
+        .chart-card-title { font-size:.78rem; font-weight:700; color:#111827; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+        .chart-card-title i { color:#A6192E; font-size:.75rem; }
+        .chart-card canvas { max-height:220px; }
         .syllabus-chip {
             display: inline-flex;
             align-items: center;
@@ -1389,38 +1455,38 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                 <div class="sa-stats">
                     <a class="sa-stat" href="<?php echo htmlspecialchars($course_progress_link); ?>">
                         <div class="sa-stat-icon si-red"><i class="fas fa-book"></i></div>
-                        <div class="sa-stat-info"><h4>Total Courses</h4><div class="sa-stat-val"><?php echo $total_courses; ?></div></div>
+                        <div class="sa-stat-info"><h4>Total Courses</h4><div class="sa-stat-val"><?php echo $total_courses; ?></div><div class="sa-stat-sub">Current term scope</div></div>
                     </a>
                     <a class="sa-stat" href="teacher_progress.php<?php echo $card_link_query !== '' ? ('?' . htmlspecialchars($card_link_query, ENT_QUOTES, 'UTF-8')) : ''; ?>">
                         <div class="sa-stat-icon si-blue"><i class="fas fa-chalkboard-teacher"></i></div>
-                        <div class="sa-stat-info"><h4>Active Teachers</h4><div class="sa-stat-val"><?php echo $teachers_monitored; ?></div></div>
+                        <div class="sa-stat-info"><h4>Active Teachers</h4><div class="sa-stat-val"><?php echo $teachers_monitored; ?></div><div class="sa-stat-sub">Mapped for current filters</div></div>
                     </a>
-                    <a class="sa-stat" href="<?php echo htmlspecialchars($students_page_link); ?>">
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($student_at_risk_link); ?>">
                         <div class="sa-stat-icon si-teal"><i class="fas fa-user-graduate"></i></div>
-                        <div class="sa-stat-info"><h4>Students In Scope</h4><div class="sa-stat-val"><?php echo $students_in_scope; ?></div></div>
+                        <div class="sa-stat-info"><h4>Students In Scope</h4><div class="sa-stat-val"><?php echo $students_in_scope; ?></div><div class="sa-stat-sub">Class-section coverage</div></div>
                     </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($course_progress_link); ?>">
                         <div class="sa-stat-icon si-green"><i class="fas fa-check-double"></i></div>
-                        <div class="sa-stat-info"><h4>Avg Syllabus</h4><div class="sa-stat-val"><?php echo $avg_syllabus; ?>%</div></div>
+                        <div class="sa-stat-info"><h4>Avg Syllabus</h4><div class="sa-stat-val"><?php echo $avg_syllabus; ?>%</div><div class="sa-stat-sub">Across active courses</div></div>
                     </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($student_at_risk_link); ?>">
                         <div class="sa-stat-icon si-amber"><i class="fas fa-exclamation-triangle"></i></div>
-                        <div class="sa-stat-info"><h4>Low Performing</h4><div class="sa-stat-val"><?php echo $low_performing_students; ?></div></div>
+                        <div class="sa-stat-info"><h4>Low Performing</h4><div class="sa-stat-val"><?php echo $low_performing_students; ?></div><div class="sa-stat-sub">Students below threshold</div></div>
                     </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($alerts_link); ?>">
                         <div class="sa-stat-icon si-purple"><i class="fas fa-bell"></i></div>
-                        <div class="sa-stat-info"><h4>Pending Alerts</h4><div class="sa-stat-val"><?php echo $pending_alerts_count; ?></div></div>
+                        <div class="sa-stat-info"><h4>Pending Alerts</h4><div class="sa-stat-val"><?php echo $pending_alerts_count; ?></div><div class="sa-stat-sub">Needs action</div></div>
                     </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($week_link); ?>">
                         <div class="sa-stat-icon si-red"><i class="fas fa-calendar-week"></i></div>
-                        <div class="sa-stat-info"><h4>Academic Week</h4><div class="sa-stat-val"><?php echo htmlspecialchars($week_number_display); ?></div></div>
+                        <div class="sa-stat-info"><h4>Academic Week</h4><div class="sa-stat-val"><?php echo htmlspecialchars($week_number_display); ?></div><div class="sa-stat-sub">Current timeline</div></div>
                     </a>
                 </div>
 
                 <div class="card">
                     <div class="card-header"><h5>Program Chair Action Insights</h5></div>
                     <div class="card-body">
-                        <ul class="insight-list">
+                        <ul style="margin:0; padding-left:18px; line-height:1.7;">
                             <?php foreach ($dashboard_insights as $insight_line): ?>
                                 <li><?php echo htmlspecialchars($insight_line); ?></li>
                             <?php endforeach; ?>
@@ -1551,7 +1617,28 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                                 <?php endif; ?>
                             </tbody>
                         </table>
-                        </div>
+                    </div>
+                </div>
+
+                <p class="section-label">Analytics</p>
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <div class="chart-card-title"><i class="fas fa-chart-line"></i> Syllabus Trend by Subject</div>
+                        <canvas id="pcLineChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-card-title"><i class="fas fa-chart-pie"></i> Subject Risk Breakdown</div>
+                        <canvas id="pcDonutChart"></canvas>
+                    </div>
+                </div>
+                <div class="charts-row2">
+                    <div class="chart-card" style="grid-column:span 2;">
+                        <div class="chart-card-title"><i class="fas fa-chart-bar"></i> Mid Exam % by Subject</div>
+                        <canvas id="pcMidBarChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-card-title"><i class="fas fa-bars"></i> Timeline Average Checkpoints</div>
+                        <canvas id="pcCheckpointBarChart"></canvas>
                     </div>
                 </div>
 
@@ -1665,9 +1752,10 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             });
 
             const subjectMeta = <?php echo json_encode($subject_chart_meta_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const classSummaryData = <?php echo json_encode($class_chart_summary_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const classSubjectData = <?php echo json_encode($class_subject_chart_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const currentClassFilter = <?php echo json_encode((string)$class_filter); ?>;
+            const syllabusData = <?php echo json_encode($syllabus_chart_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const midData = <?php echo json_encode($mid_perf_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const syllabusThreshold = <?php echo json_encode((float)$syllabus_threshold); ?>;
+            const performanceThreshold = <?php echo json_encode((float)$performance_threshold); ?>;
 
             const detailModal = document.getElementById('subjectDetailModal');
             const detailBody = document.getElementById('subjectDetailBody');
@@ -1755,172 +1843,181 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             });
 
             const RED = '#A6192E';
+            const LIGHT = 'rgba(166,25,46,0.1)';
             const barPalette = ['#A6192E', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0d9488'];
-            const lineCanvas = document.getElementById('pcLineChart');
-            const midBarCanvas = document.getElementById('pcMidBarChart');
-            const analyticsClassFilter = document.getElementById('analytics_class_filter');
-            const analyticsModeNote = document.getElementById('analytics_mode_note');
 
-            let syllabusChart = null;
-            let midChart = null;
-            let currentSubjectIds = [];
+            const syllabusLabels = syllabusData.map(item => item.abbr || item.subject_name);
+            const syllabusFullLabels = syllabusData.map(item => item.subject_name);
+            const syllabusSubjectIds = syllabusData.map(item => item.subject_id);
+            const latestSeries = syllabusData.map(item => item.latest !== null ? Number(item.latest) : null);
+            const week5Series = syllabusData.map(item => item.week5 !== null ? Number(item.week5) : null);
+            const week10Series = syllabusData.map(item => item.week10 !== null ? Number(item.week10) : null);
+            const finalSeries = syllabusData.map(item => item.final !== null ? Number(item.final) : null);
 
-            classSummaryData.forEach((row) => {
-                if (!analyticsClassFilter) {
-                    return;
+            const midMap = new Map();
+            midData.forEach((entry) => {
+                const key = String(entry.subject_id || '');
+                if (key !== '') {
+                    midMap.set(key, entry.mid_avg !== null ? Number(entry.mid_avg) : null);
                 }
-                const opt = document.createElement('option');
-                opt.value = String(row.class_key || row.class_id || '');
-                opt.textContent = row.class_label_short || row.class_label || `Class ${row.class_id}`;
-                analyticsClassFilter.appendChild(opt);
+            });
+            const midSeriesAligned = syllabusSubjectIds.map((sid) => {
+                const value = midMap.get(String(sid));
+                return value === undefined ? null : value;
             });
 
-            if (analyticsClassFilter && currentClassFilter) {
-                analyticsClassFilter.value = String(currentClassFilter);
+            const lineCanvas = document.getElementById('pcLineChart');
+            if (lineCanvas) {
+                const lineChart = new Chart(lineCanvas, {
+                    type: 'line',
+                    data: {
+                        labels: syllabusLabels,
+                        datasets: [{
+                            label: 'Latest Syllabus %',
+                            data: latestSeries,
+                            borderColor: RED,
+                            backgroundColor: LIGHT,
+                            pointBackgroundColor: RED,
+                            pointRadius: 3,
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.35
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    title: (tooltipItems) => tooltipItems.length ? (syllabusFullLabels[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => `Latest: ${formatPercentLabel(ctx.raw)}`
+                                }
+                            }
+                        },
+                        scales: { y: { beginAtZero: true, max: 100 } },
+                        onClick: (event) => {
+                            const points = lineChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
+                            if (points.length > 0) {
+                                openSubjectDetail(syllabusSubjectIds[points[0].index]);
+                            }
+                        }
+                    }
+                });
             }
 
-            const getSelectedAnalyticsData = (selectedClassId) => {
-                const classId = String(selectedClassId || '');
-                if (classId !== '' && classSubjectData[classId]) {
-                    const classEntry = classSubjectData[classId];
-                    const labels = classEntry.subjects.map(item => item.abbr || item.subject_name);
-                    const fullLabels = classEntry.subjects.map(item => item.subject_name || 'Subject');
-                    const subjectIds = classEntry.subjects.map(item => item.subject_id || null);
-                    const syllabusValues = classEntry.subjects.map(item => item.syllabus_avg !== null ? Number(item.syllabus_avg) : null);
-                    const midValues = classEntry.subjects.map(item => item.mid_avg !== null ? Number(item.mid_avg) : null);
-                    return {
-                        labels,
-                        fullLabels,
-                        subjectIds,
-                        syllabusValues,
-                        midValues,
-                        note: `Showing subject-level performance for ${classEntry.class_label}.`
-                    };
-                }
-
-                return {
-                    labels: classSummaryData.map(item => item.class_label_short || item.class_label || `Class ${item.class_id}`),
-                    fullLabels: classSummaryData.map(item => item.class_label || item.class_label_short || `Class ${item.class_id}`),
-                    subjectIds: classSummaryData.map(() => null),
-                    syllabusValues: classSummaryData.map(item => item.syllabus_avg !== null ? Number(item.syllabus_avg) : null),
-                    midValues: classSummaryData.map(item => item.mid_avg !== null ? Number(item.mid_avg) : null),
-                    note: 'Showing class/division-wise average across all mapped subjects.'
-                };
-            };
-
-            const renderAnalyticsCharts = (selectedClassId) => {
-                if (!lineCanvas || !midBarCanvas) {
+            const riskMap = new Map();
+            syllabusData.forEach((item) => {
+                const key = String(item.subject_id || item.subject_name || '');
+                if (key === '') {
                     return;
                 }
-
-                const source = getSelectedAnalyticsData(selectedClassId);
-                currentSubjectIds = source.subjectIds;
-                if (analyticsModeNote) {
-                    analyticsModeNote.textContent = source.note;
+                riskMap.set(key, {
+                    latest: item.latest !== null ? Number(item.latest) : null,
+                    mid: null
+                });
+            });
+            midData.forEach((item) => {
+                const key = String(item.subject_id || item.subject_name || '');
+                if (key === '') {
+                    return;
                 }
+                const existing = riskMap.get(key) || { latest: null, mid: null };
+                existing.mid = item.mid_avg !== null ? Number(item.mid_avg) : null;
+                riskMap.set(key, existing);
+            });
 
-                if (syllabusChart) {
-                    syllabusChart.destroy();
+            let criticalCount = 0;
+            let watchCount = 0;
+            let healthyCount = 0;
+            riskMap.forEach((entry) => {
+                const latestLow = entry.latest !== null && entry.latest < Number(syllabusThreshold);
+                const midLow = entry.mid !== null && entry.mid < Number(performanceThreshold);
+                if (latestLow && midLow) {
+                    criticalCount += 1;
+                } else if (latestLow || midLow) {
+                    watchCount += 1;
+                } else {
+                    healthyCount += 1;
                 }
-                syllabusChart = new Chart(lineCanvas, {
-                    type: 'bar',
-                    data: {
-                        labels: source.labels,
-                        datasets: [{
-                            label: 'Syllabus Coverage %',
-                            data: source.syllabusValues,
-                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
-                            borderRadius: 4
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
-                                    label: (ctx) => `Coverage: ${formatPercentLabel(ctx.raw)}`
-                                }
-                            }
-                        },
-                        scales: {
-                            y: { beginAtZero: true, max: 100 },
-                            x: {
-                                ticks: {
-                                    autoSkip: false,
-                                    maxRotation: 55,
-                                    minRotation: 35,
-                                    font: {
-                                        size: 10
-                                    }
-                                }
-                            }
-                        },
-                        onClick: (event) => {
-                            const points = syllabusChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
-                            if (!points.length) {
-                                return;
-                            }
-                            const subjectId = currentSubjectIds[points[0].index];
-                            if (subjectId) {
-                                openSubjectDetail(subjectId);
+            });
+
+            const donutCanvas = document.getElementById('pcDonutChart');
+            if (donutCanvas) {
+            new Chart(donutCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Critical Risk', 'Watchlist', 'Healthy'],
+                    datasets: [{
+                        data: [criticalCount, watchCount, healthyCount],
+                        backgroundColor: ['#A6192E', '#d97706', '#16a34a'],
+                        borderColor: '#fff',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 10 } },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => `${context.label}: ${context.raw}`
                             }
                         }
-                    }
-                });
-
-                if (midChart) {
-                    midChart.destroy();
+                    },
+                    cutout: '65%'
                 }
-                midChart = new Chart(midBarCanvas, {
+            });
+            }
+
+            const midBarCanvas = document.getElementById('pcMidBarChart');
+            if (midBarCanvas) {
+                new Chart(midBarCanvas, {
                     type: 'bar',
                     data: {
-                        labels: source.labels,
+                        labels: syllabusLabels,
                         datasets: [{
                             label: 'Mid Exam Avg %',
-                            data: source.midValues,
-                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            data: midSeriesAligned,
+                            backgroundColor: syllabusLabels.map((_, idx) => barPalette[idx % barPalette.length]),
                             borderRadius: 4
                         }]
                     },
                     options: {
                         responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
-                                    label: (ctx) => `Mid Avg: ${formatPercentLabel(ctx.raw)}`
-                                }
-                            }
-                        },
-                        scales: {
-                            y: { beginAtZero: true, max: 100 },
-                            x: {
-                                ticks: {
-                                    autoSkip: false,
-                                    maxRotation: 55,
-                                    minRotation: 35,
-                                    font: {
-                                        size: 10
-                                    }
-                                }
-                            }
-                        }
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, max: 100 } }
                     }
-                });
-            };
-
-            if (analyticsClassFilter) {
-                analyticsClassFilter.addEventListener('change', () => {
-                    renderAnalyticsCharts(analyticsClassFilter.value || '');
                 });
             }
 
-            renderAnalyticsCharts(analyticsClassFilter ? analyticsClassFilter.value : '');
+            const checkpointAvg = (series) => {
+                const values = series.filter((v) => v !== null && !Number.isNaN(v));
+                if (!values.length) return 0;
+                const sum = values.reduce((acc, cur) => acc + Number(cur), 0);
+                return Number((sum / values.length).toFixed(2));
+            };
+
+            const checkpointBarCanvas = document.getElementById('pcCheckpointBarChart');
+            if (checkpointBarCanvas) {
+                new Chart(checkpointBarCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Week 5', 'Week 10', 'Final'],
+                        datasets: [{
+                            label: 'Average %',
+                            data: [checkpointAvg(week5Series), checkpointAvg(week10Series), checkpointAvg(finalSeries)],
+                            backgroundColor: ['#A6192E', '#2563eb', '#16a34a'],
+                            borderRadius: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, max: 100 } }
+                    }
+                });
+            }
         });
     </script>
 </body>

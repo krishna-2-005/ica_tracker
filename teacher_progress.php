@@ -23,43 +23,6 @@ function columnExists(mysqli $conn, string $table, string $column): bool
     return $exists;
 }
 
-if (!function_exists('normalize_elective_short_label')) {
-    function normalize_elective_short_label(?string $value): string
-    {
-        $raw = trim((string)$value);
-        if ($raw === '') {
-            return '';
-        }
-
-        $upper = function_exists('mb_strtoupper') ? mb_strtoupper($raw, 'UTF-8') : strtoupper($raw);
-        if (preg_match('/\bOE\s*\d+\s*-\s*[A-Z0-9]+\b/u', $upper, $match)) {
-            return preg_replace('/\s+/', '', str_replace(' - ', '-', trim($match[0])));
-        }
-
-        if (preg_match('/\b(open|department(?:al)?)\s*elective\b/iu', $raw) !== 1) {
-            return $raw;
-        }
-
-        $number = '';
-        if (preg_match('/\belective\s*([0-9]+)\b/iu', $raw, $numMatch) === 1) {
-            $number = (string)$numMatch[1];
-        } elseif (preg_match('/\b([0-9]+)\b/u', $raw, $numMatch) === 1) {
-            $number = (string)$numMatch[1];
-        }
-
-        $code = '';
-        if (preg_match('/[-:\/]\s*([A-Za-z0-9]+)\s*$/u', $raw, $codeMatch) === 1) {
-            $code = strtoupper(trim((string)$codeMatch[1]));
-        }
-
-        if ($number !== '' && $code !== '') {
-            return 'OE' . $number . '-' . $code;
-        }
-
-        return $upper;
-    }
-}
-
 $class_has_school = columnExists($conn, 'classes', 'school');
 $class_has_department = columnExists($conn, 'classes', 'department');
 

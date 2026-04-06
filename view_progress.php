@@ -400,15 +400,12 @@ foreach ($subjectMetrics as $metric) {
         'topic' => $metric['topic'],
         'timeline' => $metric['timeline'],
         'modules_completed' => null,
-<<<<<<< HEAD
-=======
         'theory_plan' => (float)$metric['theory_plan'],
         'theory_actual' => (float)$metric['theory_actual'],
         'practical_plan' => (float)$metric['practical_plan'],
         'practical_actual' => (float)$metric['practical_actual'],
         'tutorial_plan' => (float)$metric['tutorial_plan'],
         'tutorial_actual' => (float)$metric['tutorial_actual'],
->>>>>>> 9cfec46 (Modified files)
         'planned_hours' => $metric['theory_plan'] + $metric['practical_plan'] + $metric['tutorial_plan'],
         'actual_hours' => $metric['theory_actual'] + $metric['practical_actual'] + $metric['tutorial_actual'],
         'completion_percentage' => $metric['completion_percentage'],
@@ -670,12 +667,9 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
 <th class="text-left">Faculty</th>
 <th class="text-left">Topic</th>
 <th class="text-left">Timeline</th>
-<<<<<<< HEAD
-=======
 <th>Theory (Done/Plan)</th>
 <th>Practical (Done/Plan)</th>
 <th>Tutorial (Done/Plan)</th>
->>>>>>> 9cfec46 (Modified files)
 <th>Planned Hours</th>
 <th>Actual Hours</th>
 <th>Completion %</th>
@@ -689,12 +683,9 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
 <td class="text-left"><?php echo htmlspecialchars($record['teacher_name_display'] ?? 'NOT ASSIGNED'); ?></td>
 <td class="text-left"><?php echo htmlspecialchars($record['topic'] ?? 'N/A'); ?></td>
 <td class="text-left"><?php echo htmlspecialchars($record['timeline'] ?? 'N/A'); ?></td>
-<<<<<<< HEAD
-=======
 <td><?php echo number_format((float)($record['theory_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['theory_plan'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['practical_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['practical_plan'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['tutorial_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['tutorial_plan'] ?? 0), 1); ?></td>
->>>>>>> 9cfec46 (Modified files)
 <td><?php echo number_format((float)($record['planned_hours'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['actual_hours'] ?? 0), 1); ?></td>
 <td><?php echo round((float)($record['completion_percentage'] ?? 0), 1); ?>%</td>
