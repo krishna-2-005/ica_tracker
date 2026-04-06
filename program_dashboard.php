@@ -825,8 +825,6 @@ $class_subject_chart_payload = [];
 $class_subject_chart_q = "SELECT
         c.id AS class_id,
         c.class_name,
-    COALESCE(tsa.section_id, 0) AS section_id,
-    COALESCE(sec_chart.section_name, '') AS section_name,
         c.semester,
         c.school,
         s.id AS subject_id,
@@ -872,45 +870,36 @@ $class_subject_chart_q = "SELECT
     LEFT JOIN students stu_chart ON stu_chart.id = ism.student_id
         AND stu_chart.class_id = c.id
         AND (tsa.section_id IS NULL OR tsa.section_id = 0 OR COALESCE(stu_chart.section_id, 0) = COALESCE(tsa.section_id, 0))
-    LEFT JOIN sections sec_chart ON sec_chart.id = tsa.section_id
     " . $chartWhereClauseSql . "
-    GROUP BY c.id, c.class_name, COALESCE(tsa.section_id, 0), COALESCE(sec_chart.section_name, ''), c.semester, c.school, s.id, s.subject_name
-    ORDER BY c.class_name, section_name, s.subject_name";
+    GROUP BY c.id, c.class_name, c.semester, c.school, s.id, s.subject_name
+    ORDER BY c.class_name, s.subject_name";
 $class_subject_chart_result = mysqli_query($conn, $class_subject_chart_q);
 if ($class_subject_chart_result) {
     $class_rollup = [];
     while ($chart_row = mysqli_fetch_assoc($class_subject_chart_result)) {
         $class_id = isset($chart_row['class_id']) ? (int)$chart_row['class_id'] : 0;
-        $section_id = isset($chart_row['section_id']) ? (int)$chart_row['section_id'] : 0;
         $subject_id = isset($chart_row['subject_id']) ? (int)$chart_row['subject_id'] : 0;
         if ($class_id <= 0 || $subject_id <= 0) {
             continue;
         }
-        $class_entity_key = $class_id . ':' . $section_id;
-        $section_name = isset($chart_row['section_name']) ? trim((string)$chart_row['section_name']) : '';
-        $class_name_base = trim((string)($chart_row['class_name'] ?? ''));
-        $semester_value = isset($chart_row['semester']) ? trim((string)$chart_row['semester']) : '';
-        $class_label_parts = [];
-        if ($class_name_base !== '') {
-            $class_label_parts[] = $class_name_base;
-        }
-        if ($semester_value !== '') {
-            $class_label_parts[] = '(Sem ' . $semester_value . ')';
-        }
-        if ($section_name !== '') {
-            $class_label_parts[] = '- ' . $section_name;
-        }
-        $class_label = trim(implode(' ', $class_label_parts));
+        $class_label = format_class_label(
+            (string)($chart_row['class_name'] ?? ''),
+            '',
+            (string)($chart_row['semester'] ?? ''),
+            (string)($chart_row['school'] ?? '')
+        );
         if ($class_label === '') {
             $class_label = (string)($chart_row['class_name'] ?? ('Class ' . $class_id));
         }
 
-        if (!isset($class_subject_chart_payload[$class_entity_key])) {
-            $class_label_short = $class_label;
-            $class_subject_chart_payload[$class_entity_key] = [
-                'class_key' => $class_entity_key,
+        if (!isset($class_subject_chart_payload[(string)$class_id])) {
+            $class_label_short = trim((string)($chart_row['class_name'] ?? ''));
+            $semester_value = isset($chart_row['semester']) ? trim((string)$chart_row['semester']) : '';
+            if ($semester_value !== '') {
+                $class_label_short .= ' (Sem ' . $semester_value . ')';
+            }
+            $class_subject_chart_payload[(string)$class_id] = [
                 'class_id' => $class_id,
-                'section_id' => $section_id,
                 'class_label' => $class_label,
                 'class_label_short' => $class_label_short !== '' ? $class_label_short : ('Class ' . $class_id),
                 'subjects' => []
@@ -927,15 +916,15 @@ if ($class_subject_chart_result) {
             'syllabus_avg' => isset($chart_row['syllabus_avg']) ? (float)$chart_row['syllabus_avg'] : null,
             'mid_avg' => isset($chart_row['mid_avg']) ? (float)$chart_row['mid_avg'] : null
         ];
-        $class_subject_chart_payload[$class_entity_key]['subjects'][] = $subject_entry;
+        $class_subject_chart_payload[(string)$class_id]['subjects'][] = $subject_entry;
 
-        if (!isset($class_rollup[$class_entity_key])) {
-            $class_rollup[$class_entity_key] = [
-                'class_key' => $class_entity_key,
+        if (!isset($class_rollup[$class_id])) {
+            $class_rollup[$class_id] = [
                 'class_id' => $class_id,
-                'section_id' => $section_id,
                 'class_label' => $class_label,
-                'class_label_short' => $class_subject_chart_payload[$class_entity_key]['class_label_short'],
+                'class_label_short' => trim((string)($chart_row['class_name'] ?? '')) !== ''
+                    ? trim((string)$chart_row['class_name']) . (isset($chart_row['semester']) && trim((string)$chart_row['semester']) !== '' ? ' (Sem ' . trim((string)$chart_row['semester']) . ')' : '')
+                    : ('Class ' . $class_id),
                 'syllabus_sum' => 0.0,
                 'syllabus_count' => 0,
                 'mid_sum' => 0.0,
@@ -943,12 +932,12 @@ if ($class_subject_chart_result) {
             ];
         }
         if ($subject_entry['syllabus_avg'] !== null) {
-            $class_rollup[$class_entity_key]['syllabus_sum'] += (float)$subject_entry['syllabus_avg'];
-            $class_rollup[$class_entity_key]['syllabus_count']++;
+            $class_rollup[$class_id]['syllabus_sum'] += (float)$subject_entry['syllabus_avg'];
+            $class_rollup[$class_id]['syllabus_count']++;
         }
         if ($subject_entry['mid_avg'] !== null) {
-            $class_rollup[$class_entity_key]['mid_sum'] += (float)$subject_entry['mid_avg'];
-            $class_rollup[$class_entity_key]['mid_count']++;
+            $class_rollup[$class_id]['mid_sum'] += (float)$subject_entry['mid_avg'];
+            $class_rollup[$class_id]['mid_count']++;
         }
     }
     mysqli_free_result($class_subject_chart_result);
@@ -960,11 +949,9 @@ if ($class_subject_chart_result) {
     }
     unset($class_entry);
 
-    foreach ($class_rollup as $rollup) {
+    foreach ($class_rollup as $class_id => $rollup) {
         $class_chart_summary_payload[] = [
-            'class_key' => $rollup['class_key'],
-            'class_id' => $rollup['class_id'],
-            'section_id' => $rollup['section_id'],
+            'class_id' => $class_id,
             'class_label' => $rollup['class_label'],
             'class_label_short' => $rollup['class_label_short'],
             'syllabus_avg' => $rollup['syllabus_count'] > 0 ? round($rollup['syllabus_sum'] / $rollup['syllabus_count'], 2) : null,
@@ -1228,86 +1215,6 @@ if ($no_recent_updates > 0) {
 if (empty($dashboard_insights)) {
     $dashboard_insights[] = 'No high-priority risk signal detected for the current filters.';
 }
-
-$teacher_scope_ids = [];
-foreach ($teacher_subject_pairs as $pair) {
-    $tid = isset($pair['teacher_id']) ? (int)$pair['teacher_id'] : 0;
-    if ($tid > 0) {
-        $teacher_scope_ids[$tid] = true;
-    }
-}
-$teachers_monitored = count($teacher_scope_ids);
-$students_in_scope = 0;
-$students_in_scope_q = "SELECT
-        COUNT(DISTINCT CASE
-            WHEN TRIM(COALESCE(st.sap_id, '')) <> '' THEN UPPER(TRIM(st.sap_id))
-            ELSE CONCAT('ID#', CAST(st.id AS CHAR))
-        END) AS total_students
-    FROM students st
-    JOIN (
-        $assignment_scope_sql
-    ) scope ON scope.class_id = st.class_id
-           AND (scope.section_id = 0 OR COALESCE(st.section_id, 0) = scope.section_id)";
-$students_in_scope_res = mysqli_query($conn, $students_in_scope_q);
-if ($students_in_scope_res && ($students_scope_row = mysqli_fetch_assoc($students_in_scope_res))) {
-    $students_in_scope = (int)($students_scope_row['total_students'] ?? 0);
-    mysqli_free_result($students_in_scope_res);
-}
-
-$below_threshold_courses = 0;
-$no_recent_updates = 0;
-$stale_teacher_ids = [];
-$todayTs = time();
-
-if ($teacher_performance_result) {
-    mysqli_data_seek($teacher_performance_result, 0);
-    while ($metrics_row = mysqli_fetch_assoc($teacher_performance_result)) {
-        $completion_value = isset($metrics_row['avg_completion']) ? (float)$metrics_row['avg_completion'] : 0.0;
-        if ($completion_value + 0.0001 < $syllabus_threshold) {
-            $below_threshold_courses++;
-        }
-
-        $last_updated_raw = isset($metrics_row['last_updated']) ? trim((string)$metrics_row['last_updated']) : '';
-        $teacher_id_metrics = isset($metrics_row['teacher_id']) ? (int)$metrics_row['teacher_id'] : 0;
-        $is_stale = true;
-        if ($last_updated_raw !== '') {
-            $last_ts = strtotime($last_updated_raw);
-            if ($last_ts !== false) {
-                $days_since = ($todayTs - $last_ts) / 86400;
-                $is_stale = $days_since > 7;
-            }
-        }
-        if ($is_stale && $teacher_id_metrics > 0) {
-            $stale_teacher_ids[$teacher_id_metrics] = true;
-        }
-    }
-    $no_recent_updates = count($stale_teacher_ids);
-    mysqli_data_seek($teacher_performance_result, 0);
-}
-
-$low_mid_subjects = 0;
-foreach ($mid_perf_data as $mid_row) {
-    if (!isset($mid_row['mid_avg']) || $mid_row['mid_avg'] === null) {
-        continue;
-    }
-    if ((float)$mid_row['mid_avg'] + 0.0001 < $performance_threshold) {
-        $low_mid_subjects++;
-    }
-}
-
-$dashboard_insights = [];
-if ($below_threshold_courses > 0) {
-    $dashboard_insights[] = $below_threshold_courses . ' mapped course allocations are below the syllabus threshold of ' . (int)round($syllabus_threshold) . '%.';
-}
-if ($low_mid_subjects > 0) {
-    $dashboard_insights[] = $low_mid_subjects . ' subjects have Mid performance below ' . (int)round($performance_threshold) . '%.';
-}
-if ($no_recent_updates > 0) {
-    $dashboard_insights[] = $no_recent_updates . ' teachers have no progress update in the last 7 days.';
-}
-if (empty($dashboard_insights)) {
-    $dashboard_insights[] = 'No high-priority risk signal detected for the current filters.';
-}
 $dashboard_insights = array_slice($dashboard_insights, 0, 2);
 ?>
 
@@ -1337,13 +1244,13 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
         .sa-stat-val { font-size:1.4rem; font-weight:700; color:#111827; line-height:1; }
         .sa-stat-sub { font-size:.68rem; color:#9ca3af; margin-top:2px; }
         .section-label { font-size:.72rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.06em; margin:0 0 8px; }
-        .charts-row { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-bottom:12px; }
+        .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
         .charts-row2 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px; }
         @media(max-width:900px){ .charts-row,.charts-row2{ grid-template-columns:1fr; } }
         .chart-card { background:#fff; border-radius:7px; border:1px solid #e5e7eb; padding:10px 13px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
         .chart-card-title { font-size:.78rem; font-weight:700; color:#111827; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
         .chart-card-title i { color:#A6192E; font-size:.75rem; }
-        .chart-card canvas { max-height:220px; }
+        .chart-card canvas { max-height:260px; min-height:240px; }
         .syllabus-chip {
             display: inline-flex;
             align-items: center;
@@ -1421,7 +1328,6 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
         .analytics-filter { display: inline-flex; align-items: center; gap: 8px; }
         .analytics-filter label { margin: 0; font-size: 0.82rem; color: #6b7280; font-weight: 600; }
         .analytics-filter select { min-width: 210px; max-width: 260px; margin: 0; padding: 6px 10px; font-size: 0.86rem; }
-        .analytics-header-right { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:8px; }
         .chart-note { margin: 0 0 8px; font-size: 0.78rem; color: #6b7280; }
     </style>
 </head>
@@ -1486,7 +1392,7 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                 <div class="card">
                     <div class="card-header"><h5>Program Chair Action Insights</h5></div>
                     <div class="card-body">
-                        <ul style="margin:0; padding-left:18px; line-height:1.7;">
+                        <ul class="insight-list">
                             <?php foreach ($dashboard_insights as $insight_line): ?>
                                 <li><?php echo htmlspecialchars($insight_line); ?></li>
                             <?php endforeach; ?>
@@ -1617,28 +1523,28 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                                 <?php endif; ?>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
 
                 <p class="section-label">Analytics</p>
                 <div class="charts-row">
                     <div class="chart-card">
-                        <div class="chart-card-title"><i class="fas fa-chart-line"></i> Syllabus Trend by Subject</div>
+                        <div class="analytics-header">
+                            <div class="chart-card-title"><i class="fas fa-chart-line"></i> Syllabus Coverage (%)</div>
+                            <div class="analytics-filter">
+                                <label for="analytics_class_filter">View By</label>
+                                <select id="analytics_class_filter">
+                                    <option value="">Class-wise Average</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="chart-note" id="analytics_mode_note">Showing class-wise average across all mapped subjects.</p>
                         <canvas id="pcLineChart"></canvas>
                     </div>
                     <div class="chart-card">
-                        <div class="chart-card-title"><i class="fas fa-chart-pie"></i> Subject Risk Breakdown</div>
-                        <canvas id="pcDonutChart"></canvas>
-                    </div>
-                </div>
-                <div class="charts-row2">
-                    <div class="chart-card" style="grid-column:span 2;">
-                        <div class="chart-card-title"><i class="fas fa-chart-bar"></i> Mid Exam % by Subject</div>
+                        <div class="chart-card-title"><i class="fas fa-chart-bar"></i> Mid Exam Performance (%)</div>
                         <canvas id="pcMidBarChart"></canvas>
-                    </div>
-                    <div class="chart-card">
-                        <div class="chart-card-title"><i class="fas fa-bars"></i> Timeline Average Checkpoints</div>
-                        <canvas id="pcCheckpointBarChart"></canvas>
                     </div>
                 </div>
 
@@ -1752,10 +1658,9 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             });
 
             const subjectMeta = <?php echo json_encode($subject_chart_meta_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const syllabusData = <?php echo json_encode($syllabus_chart_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const midData = <?php echo json_encode($mid_perf_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-            const syllabusThreshold = <?php echo json_encode((float)$syllabus_threshold); ?>;
-            const performanceThreshold = <?php echo json_encode((float)$performance_threshold); ?>;
+            const classSummaryData = <?php echo json_encode($class_chart_summary_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const classSubjectData = <?php echo json_encode($class_subject_chart_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const currentClassFilter = <?php echo json_encode((string)$class_filter); ?>;
 
             const detailModal = document.getElementById('subjectDetailModal');
             const detailBody = document.getElementById('subjectDetailBody');
@@ -1843,181 +1748,172 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             });
 
             const RED = '#A6192E';
-            const LIGHT = 'rgba(166,25,46,0.1)';
             const barPalette = ['#A6192E', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0d9488'];
-
-            const syllabusLabels = syllabusData.map(item => item.abbr || item.subject_name);
-            const syllabusFullLabels = syllabusData.map(item => item.subject_name);
-            const syllabusSubjectIds = syllabusData.map(item => item.subject_id);
-            const latestSeries = syllabusData.map(item => item.latest !== null ? Number(item.latest) : null);
-            const week5Series = syllabusData.map(item => item.week5 !== null ? Number(item.week5) : null);
-            const week10Series = syllabusData.map(item => item.week10 !== null ? Number(item.week10) : null);
-            const finalSeries = syllabusData.map(item => item.final !== null ? Number(item.final) : null);
-
-            const midMap = new Map();
-            midData.forEach((entry) => {
-                const key = String(entry.subject_id || '');
-                if (key !== '') {
-                    midMap.set(key, entry.mid_avg !== null ? Number(entry.mid_avg) : null);
-                }
-            });
-            const midSeriesAligned = syllabusSubjectIds.map((sid) => {
-                const value = midMap.get(String(sid));
-                return value === undefined ? null : value;
-            });
-
             const lineCanvas = document.getElementById('pcLineChart');
-            if (lineCanvas) {
-                const lineChart = new Chart(lineCanvas, {
-                    type: 'line',
+            const midBarCanvas = document.getElementById('pcMidBarChart');
+            const analyticsClassFilter = document.getElementById('analytics_class_filter');
+            const analyticsModeNote = document.getElementById('analytics_mode_note');
+
+            let syllabusChart = null;
+            let midChart = null;
+            let currentSubjectIds = [];
+
+            classSummaryData.forEach((row) => {
+                if (!analyticsClassFilter) {
+                    return;
+                }
+                const opt = document.createElement('option');
+                opt.value = String(row.class_id || '');
+                opt.textContent = row.class_label_short || row.class_label || `Class ${row.class_id}`;
+                analyticsClassFilter.appendChild(opt);
+            });
+
+            if (analyticsClassFilter && currentClassFilter) {
+                analyticsClassFilter.value = String(currentClassFilter);
+            }
+
+            const getSelectedAnalyticsData = (selectedClassId) => {
+                const classId = String(selectedClassId || '');
+                if (classId !== '' && classSubjectData[classId]) {
+                    const classEntry = classSubjectData[classId];
+                    const labels = classEntry.subjects.map(item => item.abbr || item.subject_name);
+                    const fullLabels = classEntry.subjects.map(item => item.subject_name || 'Subject');
+                    const subjectIds = classEntry.subjects.map(item => item.subject_id || null);
+                    const syllabusValues = classEntry.subjects.map(item => item.syllabus_avg !== null ? Number(item.syllabus_avg) : null);
+                    const midValues = classEntry.subjects.map(item => item.mid_avg !== null ? Number(item.mid_avg) : null);
+                    return {
+                        labels,
+                        fullLabels,
+                        subjectIds,
+                        syllabusValues,
+                        midValues,
+                        note: `Showing subject-level performance for ${classEntry.class_label}.`
+                    };
+                }
+
+                return {
+                    labels: classSummaryData.map(item => item.class_label_short || item.class_label || `Class ${item.class_id}`),
+                    fullLabels: classSummaryData.map(item => item.class_label || item.class_label_short || `Class ${item.class_id}`),
+                    subjectIds: classSummaryData.map(() => null),
+                    syllabusValues: classSummaryData.map(item => item.syllabus_avg !== null ? Number(item.syllabus_avg) : null),
+                    midValues: classSummaryData.map(item => item.mid_avg !== null ? Number(item.mid_avg) : null),
+                    note: 'Showing class-wise average across all mapped subjects.'
+                };
+            };
+
+            const renderAnalyticsCharts = (selectedClassId) => {
+                if (!lineCanvas || !midBarCanvas) {
+                    return;
+                }
+
+                const source = getSelectedAnalyticsData(selectedClassId);
+                currentSubjectIds = source.subjectIds;
+                if (analyticsModeNote) {
+                    analyticsModeNote.textContent = source.note;
+                }
+
+                if (syllabusChart) {
+                    syllabusChart.destroy();
+                }
+                syllabusChart = new Chart(lineCanvas, {
+                    type: 'bar',
                     data: {
-                        labels: syllabusLabels,
+                        labels: source.labels,
                         datasets: [{
-                            label: 'Latest Syllabus %',
-                            data: latestSeries,
-                            borderColor: RED,
-                            backgroundColor: LIGHT,
-                            pointBackgroundColor: RED,
-                            pointRadius: 3,
-                            borderWidth: 2,
-                            fill: true,
-                            tension: 0.35
+                            label: 'Syllabus Coverage %',
+                            data: source.syllabusValues,
+                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            borderRadius: 4
                         }]
                     },
                     options: {
                         responsive: true,
+                        maintainAspectRatio: false,
                         plugins: {
                             legend: { display: false },
                             tooltip: {
                                 callbacks: {
-                                    title: (tooltipItems) => tooltipItems.length ? (syllabusFullLabels[tooltipItems[0].dataIndex] || '') : '',
-                                    label: (ctx) => `Latest: ${formatPercentLabel(ctx.raw)}`
+                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => `Coverage: ${formatPercentLabel(ctx.raw)}`
                                 }
                             }
                         },
-                        scales: { y: { beginAtZero: true, max: 100 } },
+                        scales: {
+                            y: { beginAtZero: true, max: 100 },
+                            x: {
+                                ticks: {
+                                    autoSkip: false,
+                                    maxRotation: 55,
+                                    minRotation: 35,
+                                    font: {
+                                        size: 10
+                                    }
+                                }
+                            }
+                        },
                         onClick: (event) => {
-                            const points = lineChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
-                            if (points.length > 0) {
-                                openSubjectDetail(syllabusSubjectIds[points[0].index]);
+                            const points = syllabusChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
+                            if (!points.length) {
+                                return;
+                            }
+                            const subjectId = currentSubjectIds[points[0].index];
+                            if (subjectId) {
+                                openSubjectDetail(subjectId);
                             }
                         }
                     }
                 });
-            }
 
-            const riskMap = new Map();
-            syllabusData.forEach((item) => {
-                const key = String(item.subject_id || item.subject_name || '');
-                if (key === '') {
-                    return;
+                if (midChart) {
+                    midChart.destroy();
                 }
-                riskMap.set(key, {
-                    latest: item.latest !== null ? Number(item.latest) : null,
-                    mid: null
-                });
-            });
-            midData.forEach((item) => {
-                const key = String(item.subject_id || item.subject_name || '');
-                if (key === '') {
-                    return;
-                }
-                const existing = riskMap.get(key) || { latest: null, mid: null };
-                existing.mid = item.mid_avg !== null ? Number(item.mid_avg) : null;
-                riskMap.set(key, existing);
-            });
-
-            let criticalCount = 0;
-            let watchCount = 0;
-            let healthyCount = 0;
-            riskMap.forEach((entry) => {
-                const latestLow = entry.latest !== null && entry.latest < Number(syllabusThreshold);
-                const midLow = entry.mid !== null && entry.mid < Number(performanceThreshold);
-                if (latestLow && midLow) {
-                    criticalCount += 1;
-                } else if (latestLow || midLow) {
-                    watchCount += 1;
-                } else {
-                    healthyCount += 1;
-                }
-            });
-
-            const donutCanvas = document.getElementById('pcDonutChart');
-            if (donutCanvas) {
-            new Chart(donutCanvas, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Critical Risk', 'Watchlist', 'Healthy'],
-                    datasets: [{
-                        data: [criticalCount, watchCount, healthyCount],
-                        backgroundColor: ['#A6192E', '#d97706', '#16a34a'],
-                        borderColor: '#fff',
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 10 } },
-                        tooltip: {
-                            callbacks: {
-                                label: (context) => `${context.label}: ${context.raw}`
-                            }
-                        }
-                    },
-                    cutout: '65%'
-                }
-            });
-            }
-
-            const midBarCanvas = document.getElementById('pcMidBarChart');
-            if (midBarCanvas) {
-                new Chart(midBarCanvas, {
+                midChart = new Chart(midBarCanvas, {
                     type: 'bar',
                     data: {
-                        labels: syllabusLabels,
+                        labels: source.labels,
                         datasets: [{
                             label: 'Mid Exam Avg %',
-                            data: midSeriesAligned,
-                            backgroundColor: syllabusLabels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            data: source.midValues,
+                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
                             borderRadius: 4
                         }]
                     },
                     options: {
                         responsive: true,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true, max: 100 } }
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => `Mid Avg: ${formatPercentLabel(ctx.raw)}`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: { beginAtZero: true, max: 100 },
+                            x: {
+                                ticks: {
+                                    autoSkip: false,
+                                    maxRotation: 55,
+                                    minRotation: 35,
+                                    font: {
+                                        size: 10
+                                    }
+                                }
+                            }
+                        }
                     }
                 });
-            }
-
-            const checkpointAvg = (series) => {
-                const values = series.filter((v) => v !== null && !Number.isNaN(v));
-                if (!values.length) return 0;
-                const sum = values.reduce((acc, cur) => acc + Number(cur), 0);
-                return Number((sum / values.length).toFixed(2));
             };
 
-            const checkpointBarCanvas = document.getElementById('pcCheckpointBarChart');
-            if (checkpointBarCanvas) {
-                new Chart(checkpointBarCanvas, {
-                    type: 'bar',
-                    data: {
-                        labels: ['Week 5', 'Week 10', 'Final'],
-                        datasets: [{
-                            label: 'Average %',
-                            data: [checkpointAvg(week5Series), checkpointAvg(week10Series), checkpointAvg(finalSeries)],
-                            backgroundColor: ['#A6192E', '#2563eb', '#16a34a'],
-                            borderRadius: 4
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true, max: 100 } }
-                    }
+            if (analyticsClassFilter) {
+                analyticsClassFilter.addEventListener('change', () => {
+                    renderAnalyticsCharts(analyticsClassFilter.value || '');
                 });
             }
+
+            renderAnalyticsCharts(analyticsClassFilter ? analyticsClassFilter.value : '');
         });
     </script>
 </body>
