@@ -900,6 +900,7 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
+    <link rel="stylesheet" href="program_dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1115,23 +1116,25 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
         }
         .filter-grid select {
             width: 100%;
-            padding: 4px 8px;
+            padding: 5px 9px;
             border-radius: 8px;
             border: 1px solid #ccc;
             background-color: #fff;
             flex-grow: 0;
             font-size: 0.86rem;
             font-weight: 500;
-            letter-spacing: 0;
-            word-spacing: 0;
-            height: 34px;
-            min-height: 34px;
-            line-height: 1.25;
+            letter-spacing: normal !important;
+            word-spacing: normal !important;
+            text-rendering: optimizeLegibility;
+            height: 36px;
+            min-height: 36px;
+            line-height: normal;
+            font-family: inherit;
         }
         .filter-grid select option {
             font-size: 0.84rem;
-            letter-spacing: 0;
-            word-spacing: 0;
+            letter-spacing: normal !important;
+            word-spacing: normal !important;
         }
         .filter-actions {
             display: flex;

@@ -62,6 +62,7 @@ $email_notifications = isset($settings['email_notifications']) && $settings['ema
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
+    <link rel="stylesheet" href="program_dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
 <body class="program-chair">
