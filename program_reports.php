@@ -209,6 +209,12 @@ $fetch_teacher_student_rows = static function (
         while ($row = mysqli_fetch_assoc($result)) {
             $total_marks = isset($row['total_marks']) ? (float)$row['total_marks'] : 0.0;
             $max_total = isset($row['max_total']) ? (float)$row['max_total'] : 0.0;
+            if ($max_total > 50.0) {
+                $max_total = 50.0;
+            }
+            if ($max_total > 0 && $total_marks > $max_total + 0.0001) {
+                $total_marks = $max_total;
+            }
 
             $percentage = 0.0;
             if ($max_total > 0) {
@@ -907,7 +913,6 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
-    <link rel="stylesheet" href="program_dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
         .clickable-row { cursor: pointer; }

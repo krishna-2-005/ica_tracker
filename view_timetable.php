@@ -137,6 +137,23 @@ $pageError = '';
 
 $hasTimelineColumn = false;
 $hasBroadcastColumn = false;
+<<<<<<< HEAD
+if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?")) {
+    $timelineCol = 'timeline';
+    mysqli_stmt_bind_param($colStmt, 's', $timelineCol);
+    mysqli_stmt_execute($colStmt);
+    $timelineRes = mysqli_stmt_get_result($colStmt);
+    $hasTimelineColumn = $timelineRes && mysqli_num_rows($timelineRes) > 0;
+    mysqli_stmt_close($colStmt);
+}
+if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?")) {
+    $broadcastCol = 'is_broadcast';
+    mysqli_stmt_bind_param($colStmt, 's', $broadcastCol);
+    mysqli_stmt_execute($colStmt);
+    $broadcastRes = mysqli_stmt_get_result($colStmt);
+    $hasBroadcastColumn = $broadcastRes && mysqli_num_rows($broadcastRes) > 0;
+    mysqli_stmt_close($colStmt);
+=======
 $hasSectionColumn = false;
 $timelineColEscaped = mysqli_real_escape_string($conn, 'timeline');
 $timelineResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$timelineColEscaped}'");
@@ -157,6 +174,7 @@ $sectionResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE 
 if ($sectionResult) {
     $hasSectionColumn = mysqli_num_rows($sectionResult) > 0;
     mysqli_free_result($sectionResult);
+>>>>>>> 9cfec46 (Modified files)
 }
 
 if ($classId === null) {

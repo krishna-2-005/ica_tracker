@@ -171,10 +171,6 @@ mysqli_close($conn);
                     <div class="sa-stat-icon si-teal"><i class="fas fa-layer-group"></i></div>
                     <div class="sa-stat-info"><h4>Classes</h4><div class="sa-stat-val"><?php echo $totalClasses; ?></div><div class="sa-stat-sub">Active</div></div>
                 </div>
-                <div class="sa-stat">
-                    <div class="sa-stat-icon si-blue"><i class="fas fa-book"></i></div>
-                    <div class="sa-stat-info"><h4>Subjects</h4><div class="sa-stat-val"><?php echo $totalSubjects; ?></div><div class="sa-stat-sub">Total</div></div>
-                </div>
             </div>
 
             <p class="section-label">Analytics</p>

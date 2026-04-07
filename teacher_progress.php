@@ -23,6 +23,43 @@ function columnExists(mysqli $conn, string $table, string $column): bool
     return $exists;
 }
 
+if (!function_exists('normalize_elective_short_label')) {
+    function normalize_elective_short_label(?string $value): string
+    {
+        $raw = trim((string)$value);
+        if ($raw === '') {
+            return '';
+        }
+
+        $upper = function_exists('mb_strtoupper') ? mb_strtoupper($raw, 'UTF-8') : strtoupper($raw);
+        if (preg_match('/\bOE\s*\d+\s*-\s*[A-Z0-9]+\b/u', $upper, $match)) {
+            return preg_replace('/\s+/', '', str_replace(' - ', '-', trim($match[0])));
+        }
+
+        if (preg_match('/\b(open|department(?:al)?)\s*elective\b/iu', $raw) !== 1) {
+            return $raw;
+        }
+
+        $number = '';
+        if (preg_match('/\belective\s*([0-9]+)\b/iu', $raw, $numMatch) === 1) {
+            $number = (string)$numMatch[1];
+        } elseif (preg_match('/\b([0-9]+)\b/u', $raw, $numMatch) === 1) {
+            $number = (string)$numMatch[1];
+        }
+
+        $code = '';
+        if (preg_match('/[-:\/]\s*([A-Za-z0-9]+)\s*$/u', $raw, $codeMatch) === 1) {
+            $code = strtoupper(trim((string)$codeMatch[1]));
+        }
+
+        if ($number !== '' && $code !== '') {
+            return 'OE' . $number . '-' . $code;
+        }
+
+        return $upper;
+    }
+}
+
 $class_has_school = columnExists($conn, 'classes', 'school');
 $class_has_department = columnExists($conn, 'classes', 'department');
 
@@ -863,7 +900,6 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
-    <link rel="stylesheet" href="program_dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1059,55 +1095,48 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
         }
         .filter-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 15px;
-            margin-bottom: 10px;
-            grid-auto-rows: auto;
+            grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
+            gap: 6px;
+            margin-bottom: 2px;
+            grid-auto-rows: 1fr;
         }
         .filter-grid .form-group {
             display: flex;
             flex-direction: column;
-            gap: 6px;
-            height: auto;
+            gap: 3px;
+            height: 100%;
         }
         .filter-grid label {
             display: block;
             font-weight: 600;
             color: #A6192E;
             margin-bottom: 0;
-            font-size: 0.94rem;
+            font-size: 0.83rem;
+            line-height: 1.2;
         }
         .filter-grid select {
             width: 100%;
-            padding: 5px 9px;
-            border-radius: 8px;
+            padding: 3px 8px;
+            border-radius: 7px;
             border: 1px solid #ccc;
             background-color: #fff;
-            flex-grow: 0;
-            font-size: 0.86rem;
-            font-weight: 500;
-            letter-spacing: normal !important;
-            word-spacing: normal !important;
-            text-rendering: optimizeLegibility;
-            height: 36px;
-            min-height: 36px;
-            line-height: normal;
-            font-family: inherit;
+            flex-grow: 1;
+            font-size: 0.84rem;
+            min-height: 30px;
+            line-height: 1.25;
         }
         .filter-grid select option {
-            font-size: 0.84rem;
-            letter-spacing: normal !important;
-            word-spacing: normal !important;
+            font-size: 0.83rem;
         }
         .filter-actions {
             display: flex;
             align-items: flex-end;
-            gap: 10px;
+            gap: 6px;
             flex-wrap: wrap;
         }
         .filter-actions > div {
             display: flex;
-            gap: 8px;
+            gap: 5px;
             flex-wrap: wrap;
         }
         .filter-actions .btn {
@@ -1146,16 +1175,29 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             background-color: #7a7a7a;
         }
         .filter-section {
-            margin-bottom: 18px;
+            margin-bottom: 6px;
         }
         .filter-section:last-of-type {
             margin-bottom: 0;
         }
         .filter-section h6 {
-            margin: 0 0 8px 0;
-            font-size: 0.95rem;
+            margin: 0 0 2px 0;
+            font-size: 0.84rem;
             color: #444;
             font-weight: 600;
+        }
+        .card-body > form[method="get"] {
+            margin: 0;
+        }
+        .filter-tools-card .card-header {
+            margin-bottom: 6px;
+        }
+        .filter-tools-card .card-body {
+            padding-top: 0;
+        }
+        .filter-tools-card #compareBtn {
+            padding: 5px 10px;
+            font-size: 0.8rem;
         }
         body.dark-mode .filter-section h6 {
             color: #ffccd5;
@@ -1201,7 +1243,7 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
         <div class="main-content">
             <div class="header"><h2>Teacher Progress Analysis</h2></div>
             <div class="container">
-                <div class="card">
+                <div class="card filter-tools-card">
                     <div class="card-header">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <h5>Filters & Tools</h5>
@@ -1288,8 +1330,8 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             <div class="form-group filter-actions">
                 <label>&nbsp;</label>
                 <div>
-                    <button type="submit" class="btn primary" style="padding: 8px 14px;">Apply filters</button>
-                    <a href="teacher_progress.php" class="btn" style="padding: 8px 14px;">Reset filters</a>
+                    <button type="submit" class="btn primary" style="padding: 5px 10px;">Apply filters</button>
+                    <a href="teacher_progress.php" class="btn" style="padding: 5px 10px;">Reset filters</a>
                 </div>
             </div>
         </div>

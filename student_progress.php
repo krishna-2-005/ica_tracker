@@ -197,9 +197,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
         mysqli_free_result($marked_subjects_res);
     }
 
+    $subject_max_marks_limit = 50.0;
     $subject_components = [];
     $subject_faculty_map = [];
     $subject_topper_map = [];
+    $subject_scale_factor_map = [];
     foreach ($assigned_subjects as $sid => $subject_name) {
         $subject_components[$sid] = [];
         $subject_faculty_map[$sid] = [];
@@ -307,6 +309,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
             mysqli_free_result($subject_marks_res);
         }
 
+        foreach ($subject_components as $sid => $components) {
+            $allocated_total = 0.0;
+            foreach ($components as $component) {
+                $allocated_total += max(0.0, (float)($component['max_total'] ?? 0.0));
+            }
+
+            if ($allocated_total > $subject_max_marks_limit + 0.0001) {
+                $subject_scale_factor_map[$sid] = $subject_max_marks_limit / $allocated_total;
+            } else {
+                $subject_scale_factor_map[$sid] = 1.0;
+            }
+        }
+
         $section_scope_condition = $student_section_id > 0
             ? ('COALESCE(st_scope.section_id, 0) = ' . $student_section_id)
             : '1=1';
@@ -352,7 +367,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
                 $scale_ratio = ($raw_capacity > 0 && $scaled_total > 0)
                     ? ($scaled_total / $raw_capacity)
                     : 1.0;
-                $scaled_mark = ((float)$topper_row['marks']) * $scale_ratio;
+                $subject_scale_factor = isset($subject_scale_factor_map[$sid]) ? (float)$subject_scale_factor_map[$sid] : 1.0;
+                $scaled_mark = ((float)$topper_row['marks']) * $scale_ratio * $subject_scale_factor;
 
                 $score_key = $sid . ':' . $scope_student_id;
                 if (!isset($subject_student_scores[$score_key])) {
@@ -392,17 +408,21 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
         $subject_short = build_subject_short_label($subject_label);
 
         $subjects_payload[$subject_label] = [];
+        $subject_scale_factor = isset($subject_scale_factor_map[$sid]) ? (float)$subject_scale_factor_map[$sid] : 1.0;
+        $subject_max_total = 0.0;
         $subject_total = 0.0;
         $subject_has_numeric = false;
 
         foreach (($subject_components[$sid] ?? []) as $component) {
-            $label = build_component_sum_label($component['component_name'], $component['instances'], $component['max_total']);
+            $component_max_total = round(((float)$component['max_total']) * $subject_scale_factor, 2);
+            $subject_max_total += $component_max_total;
+            $label = build_component_sum_label($component['component_name'], $component['instances'], $component_max_total);
             $is_absent = !$component['has_numeric'] && $component['has_any'];
             $scaled_mark = null;
             if ($component['has_numeric']) {
                 $ratio = isset($component['scale_ratio']) ? (float)$component['scale_ratio'] : 1.0;
                 $raw_total = isset($component['raw_total']) ? (float)$component['raw_total'] : 0.0;
-                $scaled_mark = $raw_total * $ratio;
+                $scaled_mark = $raw_total * $ratio * $subject_scale_factor;
                 $subject_total += $scaled_mark;
                 $subject_has_numeric = true;
             }
@@ -410,7 +430,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
             $subjects_payload[$subject_label][] = [
                 'component_name' => $label,
                 'marks' => $component['has_numeric'] ? round($scaled_mark, 2) : null,
-                'max_marks' => $component['max_total'],
+                'max_marks' => $component_max_total,
                 'is_absent' => $is_absent,
                 'assigned_faculty' => $assigned_faculty,
                 'short_label' => $subject_short,
@@ -418,10 +438,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
             ];
         }
 
+        if ($subject_max_total > $subject_max_marks_limit + 0.0001) {
+            $subject_max_total = $subject_max_marks_limit;
+        }
+        if ($subject_max_total > 0 && $subject_total > $subject_max_total + 0.0001) {
+            $subject_total = $subject_max_total;
+        }
+
         $all_subjects_rows[] = [
             'component_name' => $subject_label,
             'marks' => $subject_has_numeric ? round($subject_total, 2) : null,
-            'max_marks' => isset($subject_topper_map[$sid]) ? (float)$subject_topper_map[$sid]['marks'] : null,
+            'max_marks' => $subject_max_total > 0 ? round($subject_max_total, 2) : null,
             'is_absent' => !$subject_has_numeric,
             'assigned_faculty' => $assigned_faculty,
             'short_label' => $subject_short,
@@ -446,25 +473,15 @@ if ($school_param_provided) {
 } elseif ($pc_school !== '') {
     $school_filter = $pc_school;
 }
+$semester_filter = isset($_GET['semester']) && $_GET['semester'] !== '' ? trim($_GET['semester']) : '';
+$class_filter = isset($_GET['class_id']) && $_GET['class_id'] !== '' ? (int)$_GET['class_id'] : 0;
+$section_filter = isset($_GET['section_id']) && $_GET['section_id'] !== '' ? (int)$_GET['section_id'] : 0;
+$status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
+
 $contextSchool = $school_filter !== '' ? $school_filter : $pc_school;
 $academicContext = resolveAcademicContext($conn, [
     'school_name' => $contextSchool
 ]);
-$timeline_semester = '';
-if (isset($academicContext['active']['semester_number']) && $academicContext['active']['semester_number'] !== null) {
-    $timeline_semester = trim((string)$academicContext['active']['semester_number']);
-}
-
-$semester_param_provided = array_key_exists('semester', $_GET);
-$semester_filter = ($semester_param_provided && isset($_GET['semester']) && $_GET['semester'] !== '')
-    ? trim($_GET['semester'])
-    : '';
-if (!$semester_param_provided && $timeline_semester !== '') {
-    $semester_filter = $timeline_semester;
-}
-$class_filter = isset($_GET['class_id']) && $_GET['class_id'] !== '' ? (int)$_GET['class_id'] : 0;
-$section_filter = isset($_GET['section_id']) && $_GET['section_id'] !== '' ? (int)$_GET['section_id'] : 0;
-$status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 
 $available_schools = [];
 $schools_res = mysqli_query($conn, "SELECT school_name FROM schools ORDER BY school_name");
@@ -492,22 +509,10 @@ if ($pc_school !== '' && !in_array($pc_school, $available_schools, true)) {
 
 $semesters = [];
 if ($school_filter !== '') {
-    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ?";
-    $sem_types = 's';
-    $sem_params = [$school_filter];
-    if ($timeline_semester !== '') {
-        $sem_sql .= " AND semester = ?";
-        $sem_types .= 's';
-        $sem_params[] = $timeline_semester;
-    }
-    $sem_sql .= " ORDER BY CAST(semester AS UNSIGNED)";
+    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ? ORDER BY CAST(semester AS UNSIGNED)";
     $sem_stmt = mysqli_prepare($conn, $sem_sql);
     if ($sem_stmt) {
-        if ($sem_types === 's') {
-            mysqli_stmt_bind_param($sem_stmt, 's', $sem_params[0]);
-        } else {
-            mysqli_stmt_bind_param($sem_stmt, 'ss', $sem_params[0], $sem_params[1]);
-        }
+        mysqli_stmt_bind_param($sem_stmt, "s", $school_filter);
         mysqli_stmt_execute($sem_stmt);
         $sem_res = mysqli_stmt_get_result($sem_stmt);
         if ($sem_res) {
@@ -776,7 +781,6 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
-    <link rel="stylesheet" href="program_dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -877,6 +881,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                             </div>
                             <div style="margin-top: 20px; display: flex; gap: 10px;">
                                 <button type="submit" class="btn">Apply Filters</button>
+                                <button type="button" id="resetFiltersBtn" class="btn" style="background:#63666A;">Reset Filters</button>
                                 <button type="button" id="exportCsvBtn" class="btn" <?php echo empty($students) ? 'disabled' : ''; ?>><i class="fas fa-file-csv"></i> Download CSV</button>
                             </div>
                         </form>
@@ -1002,6 +1007,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             const sectionContainer = document.getElementById('section_filter_container');
             const sectionFilter = document.getElementById('section_filter');
             const statusFilter = document.getElementById('status_filter');
+            const resetBtn = document.getElementById('resetFiltersBtn');
             const exportBtn = document.getElementById('exportCsvBtn');
 
             const currentSchool = <?php echo json_encode($school_filter); ?>;
@@ -1009,7 +1015,6 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             const currentClass = <?php echo json_encode($class_filter > 0 ? $class_filter : ''); ?>;
             const currentSection = <?php echo json_encode($section_filter > 0 ? $section_filter : ''); ?>;
             const currentStatus = <?php echo json_encode($status_filter); ?>;
-            const timelineSemester = <?php echo json_encode($timeline_semester); ?>;
 
             if (statusFilter && currentStatus !== null) {
                 statusFilter.value = currentStatus;
@@ -1037,15 +1042,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                 fetch(`get_semesters.php?school=${encodeURIComponent(school)}`)
                     .then(response => response.json())
                     .then(data => {
-                        const filteredSemesters = Array.isArray(data)
-                            ? data.filter(item => !timelineSemester || String(item.semester) === String(timelineSemester))
-                            : [];
-
-                        if (!selectedSemester && timelineSemester) {
-                            selectedSemester = timelineSemester;
-                        }
-
-                        filteredSemesters.forEach(item => {
+                        data.forEach(item => {
                             const option = document.createElement('option');
                             option.value = item.semester;
                             option.textContent = `Semester ${item.semester}`;
@@ -1057,8 +1054,6 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
 
                         if (selectedSemester) {
                             populateClasses(school, selectedSemester, selectedClass, selectedSection);
-                        } else if (timelineSemester && filteredSemesters.length) {
-                            populateClasses(school, timelineSemester, selectedClass, selectedSection);
                         }
                     })
                     .catch(() => {});
@@ -1150,6 +1145,13 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             }
             if (currentClass) {
                 populateSections(currentClass, currentSection);
+            }
+
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    window.location.href = 'student_progress.php';
+                });
             }
 
             if (exportBtn) {
