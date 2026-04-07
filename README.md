@@ -1,203 +1,395 @@
 # ICA Tracker
 
-Full-stack academic performance management platform for ICA (Internal Continuous Assessment) operations, role-based analytics, and institution-wide communication.
+Comprehensive web application for ICA (Internal Continuous Assessment) lifecycle management across Admin, Program Chair, Faculty, Student, and System Admin roles.
 
-This project was designed for real college workflows where multiple stakeholders (Admin, Program Chair, Faculty, Student, System Admin) need one reliable source of truth for classes, components, marks, alerts, and timetable updates.
+It centralizes class setup, subject mapping, ICA component design, marks operations, progress analytics, alerts, and communication workflows in a single PHP/MySQL platform.
 
-## Why This Project Matters
+## 1. Project Overview
 
-Traditional ICA tracking in spreadsheets creates duplicate data, inconsistent reporting, and delayed communication.
+ICA Tracker is designed for real academic operations where multiple stakeholders need synchronized data and actionable dashboards.
 
-ICA Tracker solves that by providing:
+Key outcomes:
 
-- Centralized academic data management
-- Role-aware dashboards and reporting
-- Structured CSV onboarding for large student batches
-- SMTP-based notification workflows for operational communication
-- Academic calendar aligned filtering and progress visibility
+- One source of truth for classes, sections, subjects, and marks.
+- Role-specific dashboards and workflows.
+- Academic-term-aware filtering and reporting.
+- Operational communication through SMTP notifications.
+- Bulk onboarding for students with validation and quality controls.
 
-## Core Capabilities
+## 2. Technology Stack
 
-- Multi-role access with dedicated dashboards:
-	- Admin
-	- Program Chair
-	- Faculty
-	- Student
-	- System Admin
-- Class, subject, section, and ICA component lifecycle management
-- ICA marks entry, progress tracking, and comparison reporting
-- Bulk student import with schema validation and controlled upsert behavior
-- Optional NMIMS college email onboarding through CSV and forms
-- Alerting and manual mailing workflows with audience targeting
-- Timetable upload, preview, and broadcast support
-- Academic context support (term/semester aware filtering)
-
-## Recent Enhancements
-
-- Program Chair dashboard data consistency and compatibility improvements
-- Program Chair dashboard layout and visualization upgrade (system-admin style alignment)
-- Test Mail audience targeting:
-	- Classes
-	- Faculty
-	- Program Chair
-	- Everyone
-- Multi-class selection for class-wise mailing
-- Other Reason mail scenario with required message input
-- Bulk upload behavior hardened to prevent redundant student rewrites:
-	- Existing SAP + Class records keep core data unchanged
-	- Only missing NMIMS college email is filled
-- Detailed validation feedback for invalid non-NMIMS email entries (with SAP ID and student name)
-
-## Tech Stack
-
-- Backend: PHP
+- Backend: PHP (procedural + modular helpers)
 - Database: MySQL / MariaDB
-- Frontend: HTML, CSS, JavaScript
-- Mail: PHPMailer over SMTP
-- Environment management: vlucas/phpdotenv
-- Dependency management: Composer
+- Frontend: HTML, CSS, JavaScript, Chart.js
+- Mail: PHPMailer
+- Config/env: `vlucas/phpdotenv`
+- Dependency manager: Composer
 
-## Dependencies
+Dependencies from [composer.json](composer.json):
 
-Defined in [composer.json](composer.json):
+- `phpmailer/phpmailer` `^6.8`
+- `vlucas/phpdotenv` `^5.6`
 
-- phpmailer/phpmailer
-- vlucas/phpdotenv
+## 3. Architecture
 
-## High-Level Architecture
+Core runtime and configuration:
 
-- Root PHP pages: route-level modules and dashboards
-- [includes/](includes/) : shared helpers (auth bootstrap, academic context, notifications, logging)
-- [app/](app/) : bootstrap, PSR-4 autoloaded domain support
-- [config/](config/) : app, database, mail, session configuration
-- [uploads/](uploads/) : uploaded artifacts (such as timetables)
-- [storage/logs/](storage/logs/) : runtime logs
-- SQL dump: [ica_tracker (35).sql](ica_tracker%20(35).sql)
+- Bootstrap: [app/bootstrap.php](app/bootstrap.php)
+- DB connection entrypoint: [db_connect.php](db_connect.php)
+- Session + startup init: [includes/init.php](includes/init.php)
 
-## Key Modules (Interview Navigation)
+Configuration files:
 
-- Authentication and entry:
-	- [index.php](index.php)
-	- [login.php](login.php)
-	- [admin_login.php](admin_login.php)
-- Dashboards:
-	- [admin_dashboard.php](admin_dashboard.php)
-	- [program_dashboard.php](program_dashboard.php)
-	- [teacher_dashboard.php](teacher_dashboard.php)
-	- [student_dashboard.php](student_dashboard.php)
-	- [system_admin_dashboard.php](system_admin_dashboard.php)
-- Student onboarding and maintenance:
-	- [bulk_add_students.php](bulk_add_students.php)
-	- [edit_student.php](edit_student.php)
-- Mailing and alerts:
-	- [test_mail.php](test_mail.php)
-	- [send_alerts.php](send_alerts.php)
-	- [includes/email_notifications.php](includes/email_notifications.php)
-- Reports and analytics:
-	- [reports.php](reports.php)
-	- [program_reports.php](program_reports.php)
-	- [subject_comparison.php](subject_comparison.php)
+- App: [config/app.php](config/app.php)
+- Database: [config/database.php](config/database.php)
+- Mail: [config/mail.php](config/mail.php)
+- Session: [config/session.php](config/session.php)
 
-## Local Setup (XAMPP)
+Shared utility modules (high-use):
 
-1. Install XAMPP (or equivalent PHP + MySQL stack).
-2. Place the project inside your XAMPP htdocs folder as ica_tracker.
-3. From project root, install dependencies:
+- Academic context: [includes/academic_context.php](includes/academic_context.php)
+- Term switcher UI: [includes/term_switcher_ui.php](includes/term_switcher_ui.php)
+- Email notifications: [includes/email_notifications.php](includes/email_notifications.php)
+- Mail sender wrapper: [includes/mailer.php](includes/mailer.php)
+- Activity log helper: [includes/activity_logger.php](includes/activity_logger.php)
 
-```bash
+## 4. Directory Layout
+
+Top-level directories:
+
+- [app/](app/) - bootstrap + namespaced support classes
+- [config/](config/) - runtime config maps
+- [includes/](includes/) - shared feature helpers
+- [css/](css/) - additional stylesheet assets
+- [Classes/](Classes/) - templates and class resources
+- [uploads/](uploads/) - uploaded files (timetables, etc.)
+- [storage/](storage/) - logs and runtime files
+- [vendor/](vendor/) - Composer packages
+
+Top-level SQL dump:
+
+- [ica_tracker (35).sql](ica_tracker%20(35).sql)
+
+## 5. Role-Based Feature Map
+
+### Admin
+
+- Dashboard and admin actions: [admin_dashboard.php](admin_dashboard.php)
+- Manage classes: [create_classes.php](create_classes.php)
+- Manage subjects: [create_subjects.php](create_subjects.php)
+- Assign faculty: [assign_teachers.php](assign_teachers.php)
+- Manage teachers: [manage_teachers.php](manage_teachers.php)
+- Manage sections/divisions: [manage_sections.php](manage_sections.php)
+- Manage roles: [change_roles.php](change_roles.php)
+- Bulk add/edit students: [bulk_add_students.php](bulk_add_students.php), [edit_student.php](edit_student.php)
+- Manual mailing: [test_mail.php](test_mail.php)
+- Academic calendar: [manage_academic_calendar.php](manage_academic_calendar.php)
+
+### Program Chair
+
+- Dashboard: [program_dashboard.php](program_dashboard.php)
+- Teacher analytics: [teacher_progress.php](teacher_progress.php)
+- Student analytics: [student_progress.php](student_progress.php)
+- Course analytics: [course_progress.php](course_progress.php)
+- Reports: [program_reports.php](program_reports.php), [reports.php](reports.php)
+- Alerts: [send_alerts.php](send_alerts.php)
+- Settings: [settings.php](settings.php)
+
+### Faculty
+
+- Dashboard: [teacher_dashboard.php](teacher_dashboard.php)
+- Update syllabus progress: [update_progress.php](update_progress.php)
+- ICA component creation: [create_ica_components.php](create_ica_components.php)
+- ICA marks operations: [manage_ica_marks.php](manage_ica_marks.php)
+- Assignments flow: [assignments.php](assignments.php)
+- Faculty reports and alerts: [view_reports.php](view_reports.php), [view_alerts.php](view_alerts.php)
+- Timetable page: [timetable.php](timetable.php)
+
+### Student
+
+- Dashboard: [student_dashboard.php](student_dashboard.php)
+- Marks view: [view_marks.php](view_marks.php)
+- Assignment marks: [view_assignment_marks.php](view_assignment_marks.php)
+- Timetable view: [view_timetable.php](view_timetable.php)
+
+### System Admin
+
+- Dashboard: [system_admin_dashboard.php](system_admin_dashboard.php)
+- Activity feed: [system_admin_activity_feed.php](system_admin_activity_feed.php)
+- Backup/restore export flow: [system_admin_export_sql.php](system_admin_export_sql.php)
+
+## 6. Full Setup Guide (Windows + XAMPP)
+
+### Prerequisites
+
+- Windows with XAMPP (Apache + MySQL)
+- PHP compatible with dependencies
+- Composer
+- Git
+
+### Installation Steps
+
+1. Clone project into XAMPP htdocs:
+
+```powershell
+cd D:\XAMPP\htdocs
+git clone https://github.com/krishna-2-005/ica_tracker.git
+cd ica_tracker
+```
+
+2. Install dependencies:
+
+```powershell
 composer install
 composer dump-autoload
 ```
 
-4. Configure environment variables in .env (create from sample if needed):
-	 - Database credentials
-	 - SMTP credentials
-	 - App URL
-5. Start Apache and MySQL.
-6. Create a database, for example: ica_tracker.
-7. Import [ica_tracker (35).sql](ica_tracker%20(35).sql).
-8. Ensure write permission for [uploads/](uploads/) and [storage/logs/](storage/logs/).
-9. Open:
+3. Configure env:
+
+```powershell
+copy .env.example .env
+```
+
+4. Update `.env` with your local credentials.
+
+5. Create database and import dump:
+
+- Create DB: `ica_tracker`
+- Import [ica_tracker (35).sql](ica_tracker%20(35).sql)
+
+6. Start Apache and MySQL from XAMPP.
+
+7. Open app:
 
 ```text
 http://localhost/ica_tracker
 ```
 
-## Mail Configuration
+## 7. Environment Variables Reference
 
-- Enable mail via .env flags/settings.
-- Default SMTP flow is PHPMailer based.
-- For Gmail SMTP, use App Password (2FA-enabled account).
-- Primary mail template:
-	- [emailtemplate.html](emailtemplate.html)
+Sample source: [.env.example](.env.example)
 
-## Bulk Upload Rules
+### Application
 
-Required CSV columns (any order):
+- `APP_NAME`
+- `APP_ENV`
+- `APP_DEBUG`
+- `APP_URL`
+- `APP_TIMEZONE`
+- `APP_LOCALE`
 
-- S/N
-- ROLL NO
-- SAP ID
-- NAME OF STUDENT
+### Database
 
-Mandatory for new joining students:
+- `DB_HOST`
+- `DB_PORT`
+- `DB_DATABASE`
+- `DB_USERNAME`
+- `DB_PASSWORD`
+- `DB_CHARSET`
+- `DB_SOCKET`
+- `DB_TIMEOUT`
 
-- COLLEGE EMAIL (NMIMS domains only)
+### Session
 
-Data behavior:
+- `SESSION_NAME`
+- `SESSION_LIFETIME`
+- `SESSION_PATH`
+- `SESSION_DOMAIN`
+- `SESSION_SECURE`
+- `SESSION_HTTP_ONLY`
+- `SESSION_SAME_SITE`
 
-- New SAP + Class: inserts new student
-	- Insert is allowed only when a valid NMIMS COLLEGE EMAIL is provided
-- Existing SAP + Class:
-	- Student core profile is preserved
-	- Missing college email is filled only if valid NMIMS email is provided
-- Invalid non-NMIMS emails are ignored and reported with student-level details
+### Mail
 
-## Security and Reliability Notes
+- `MAIL_ENABLED`
+- `MAIL_HOST`
+- `MAIL_PORT`
+- `MAIL_USERNAME`
+- `MAIL_PASSWORD`
+- `MAIL_ENCRYPTION`
+- `MAIL_FROM_ADDRESS`
+- `MAIL_FROM_NAME`
+- `MAIL_DEBUG`
 
-- Session-based role guards on protected pages
-- Parameterized SQL usage across critical flows
-- Server-side validation for CSV ingest and mail audiences
-- Logging support for tracing mail and runtime issues
-- Environment-driven secrets management via .env
+### Logging
 
-## Interview Talking Points
+- `LOG_PATH`
 
-Use these points when presenting this project:
+Important security note:
 
-1. Problem to Product:
-Built a role-based academic operations platform replacing spreadsheet-driven workflows.
+- Never commit real credentials.
+- Immediately rotate passwords if they were ever committed by mistake.
 
-2. Data Integrity:
-Implemented controlled upsert logic to prevent redundant student rewrites while allowing incremental email enrichment.
+## 8. Authentication and Access Pages
 
-3. Backward Compatibility:
-Handled schema variance in dashboard queries to avoid runtime failures across older databases.
+- Main entry: [index.php](index.php)
+- Login pages: [login.php](login.php), [admin_login.php](admin_login.php), [login_as.php](login_as.php)
+- Account actions: [forgot_password.php](forgot_password.php), [reset_password.php](reset_password.php), [change_password.php](change_password.php), [logout.php](logout.php)
 
-4. Communication Layer:
-Integrated SMTP notifications and admin-controlled audience targeting with scenario templates.
+## 9. Data Operations and Bulk Upload Rules
 
-5. Product Thinking:
-Prioritized operational UX by adding recipient previews, multi-class targeting, and actionable upload error reporting.
+Student bulk upload page: [bulk_add_students.php](bulk_add_students.php)
 
-6. Production Mindset:
-Used logging, validation, and modular helpers to improve maintainability and troubleshooting.
+Expected CSV columns:
 
-## Suggested Demo Flow (5-7 minutes)
+- `S/N`
+- `ROLL NO`
+- `SAP ID`
+- `NAME OF STUDENT`
+- `COLLEGE EMAIL` (mandatory for new joins, validated for NMIMS domains)
 
-1. Login as Admin and open [admin_dashboard.php](admin_dashboard.php)
-2. Show bulk student upload with mandatory NMIMS email for new joins and controlled enrichment for existing records in [bulk_add_students.php](bulk_add_students.php)
-3. Show manual mailing with audience targeting in [test_mail.php](test_mail.php)
-4. Show Program Chair analytics in [program_dashboard.php](program_dashboard.php)
-5. Show reporting view in [program_reports.php](program_reports.php)
+Behavior summary:
 
-## Future Scope
+- Existing student rows are not blindly overwritten.
+- Missing valid college emails are enriched.
+- Invalid non-approved domains are rejected with feedback.
 
-- API-first service layer for integrations
-- Queue-based asynchronous email dispatch
-- Audit dashboards for data quality and mail delivery metrics
-- Granular permissions model beyond role-level access
+Templates:
 
-## License
+- [download_template.php](download_template.php)
+- [download_class_students_template.php](download_class_students_template.php)
+- [Classes/Student List Template .csv](Classes/Student%20List%20Template%20.csv)
 
-Internal academic project.
+## 10. ICA and Marks Workflow
+
+Recommended functional sequence:
+
+1. Create classes/sections and subjects.
+2. Assign teachers to subject/class/division.
+3. Define ICA components per subject.
+4. Enter/publish marks.
+5. View analytics and reports.
+6. Trigger alerts where necessary.
+
+Primary pages:
+
+- Components: [create_ica_components.php](create_ica_components.php)
+- Marks entry: [manage_ica_marks.php](manage_ica_marks.php)
+- Marks fetch endpoints: [get_ica_components.php](get_ica_components.php), [get_student_marks.php](get_student_marks.php), [get_subject_ica_components.php](get_subject_ica_components.php)
+
+## 11. Reporting and Analytics Modules
+
+- Program-level: [program_dashboard.php](program_dashboard.php), [program_reports.php](program_reports.php)
+- Teacher-level: [teacher_progress.php](teacher_progress.php)
+- Student-level: [student_progress.php](student_progress.php), [student_dashboard.php](student_dashboard.php)
+- Course-level: [course_progress.php](course_progress.php)
+- Comparative analysis: [subject_comparison.php](subject_comparison.php), [subject_comparison_details.php](subject_comparison_details.php)
+- Export/report generation: [generate_report.php](generate_report.php), [view_reports.php](view_reports.php)
+
+## 12. Alerts and Communication
+
+- Alert workflows: [alerts.php](alerts.php), [send_alerts.php](send_alerts.php), [trigger_scaled_alert.php](trigger_scaled_alert.php)
+- Mail templates: [emailtemplate.html](emailtemplate.html)
+- Notification engine: [includes/email_notifications.php](includes/email_notifications.php)
+- Manual mailing utility: [test_mail.php](test_mail.php)
+
+## 13. Timetable Management
+
+- Faculty timetable management: [timetable.php](timetable.php), [preview_timetable.php](preview_timetable.php)
+- Student timetable view: [view_timetable.php](view_timetable.php)
+- Uploaded files stored in: [uploads/](uploads/)
+
+## 14. API-Like Endpoints (AJAX/Fetch)
+
+Common data endpoints used by dashboards/forms:
+
+- [get_classes.php](get_classes.php)
+- [get_sections.php](get_sections.php)
+- [get_semesters.php](get_semesters.php)
+- [get_student.php](get_student.php)
+- [get_students_for_class.php](get_students_for_class.php)
+- [get_students_for_subject.php](get_students_for_subject.php)
+- [get_teachers_by_school.php](get_teachers_by_school.php)
+- [get_teachers_by_department.php](get_teachers_by_department.php)
+- [get_progress_status.php](get_progress_status.php)
+- [get_users.php](get_users.php)
+
+## 15. Logging, Debugging, and Diagnostics
+
+Logs and debug artifacts:
+
+- Runtime logs: [storage/](storage/), `storage/logs/app.log`
+- Legacy/debug scripts in root:
+  - [debug_pc.php](debug_pc.php)
+  - [debug_query.php](debug_query.php)
+  - [debug_teacher_details.php](debug_teacher_details.php)
+  - [debug.log](debug.log)
+
+Troubleshooting checklist:
+
+- Confirm `.env` values and DB credentials.
+- Verify Apache/MySQL service status.
+- Ensure DB import completed.
+- Check mail config and SMTP restrictions.
+- Check logs for stack traces and SQL errors.
+
+## 16. Git Workflow Notes
+
+If push is rejected due to remote updates:
+
+```powershell
+git fetch origin
+git pull --rebase origin main
+git push origin main
+```
+
+If rebase conflict occurs:
+
+```powershell
+git status
+# resolve files
+git add <resolved-files>
+git rebase --continue
+```
+
+Abort only if needed:
+
+```powershell
+git rebase --abort
+```
+
+## 17. Security Practices
+
+- Keep `.env` out of version control.
+- Do not store real credentials in docs/screenshots.
+- Use strong session settings and secure cookies in production.
+- Validate all file uploads and input sources.
+- Prefer parameterized queries and strict type checks.
+
+## 18. Deployment Readiness Checklist
+
+- `composer install --no-dev` on server
+- production `.env` configured
+- DB migration/import verified
+- writable `uploads/` and `storage/logs/`
+- HTTPS enabled
+- `APP_DEBUG=false`
+- SMTP validated in production
+
+## 19. Quick Page Index
+
+Core pages in root include:
+
+- [admin_dashboard.php](admin_dashboard.php)
+- [program_dashboard.php](program_dashboard.php)
+- [teacher_dashboard.php](teacher_dashboard.php)
+- [student_dashboard.php](student_dashboard.php)
+- [system_admin_dashboard.php](system_admin_dashboard.php)
+- [reports.php](reports.php)
+- [view_reports.php](view_reports.php)
+- [manage_ica_marks.php](manage_ica_marks.php)
+- [create_ica_components.php](create_ica_components.php)
+- [assignments.php](assignments.php)
+- [view_assignment_marks.php](view_assignment_marks.php)
+
+## 20. Project Status and Ownership
+
+Project type: internal academic operations platform.
+
+Current repository:
+
+- `https://github.com/krishna-2-005/ica_tracker`
+
+## 21. License
+
+Internal project. Add an explicit license file if external distribution is planned.
