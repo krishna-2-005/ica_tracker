@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
@@ -286,7 +286,7 @@ if ($calendar_result) {
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
                        <a href="manage_academic_calendar.php" class="active"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -384,9 +384,9 @@ if ($calendar_result) {
                                                     $label_parts[] = 'AY ' . $entry['academic_year'];
                                                 }
                                             }
-                                            $label_text = $label_parts ? implode(' • ', $label_parts) : 'Timeline';
+                                            $label_text = $label_parts ? implode(' - ', $label_parts) : 'Timeline';
                                             if (!empty($entry['start_date']) && !empty($entry['end_date'])) {
-                                                $label_text .= ' • ' . date('d M Y', strtotime((string)$entry['start_date'])) . ' - ' . date('d M Y', strtotime((string)$entry['end_date']));
+                                                $label_text .= ' - ' . date('d M Y', strtotime((string)$entry['start_date'])) . ' - ' . date('d M Y', strtotime((string)$entry['end_date']));
                                             }
                                             $created_at = isset($entry['created_at']) && $entry['created_at'] !== null ? date('d M Y H:i', strtotime((string)$entry['created_at'])) : 'N/A';
                                         ?>
@@ -502,3 +502,5 @@ if ($calendar_result) {
     </script>
 </body>
 </html>
+
+

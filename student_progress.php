@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/academic_context.php';
+require_once __DIR__ . '/includes/term_switcher_ui.php';
 
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'program_chair') {
     header('Location: login.php');
@@ -49,6 +51,44 @@ if (!function_exists('build_component_sum_label')) {
     }
 }
 
+if (!function_exists('build_subject_short_label')) {
+    function build_subject_short_label(string $subject_name): string
+    {
+        $subject_name = trim($subject_name);
+        if ($subject_name === '') {
+            return '';
+        }
+
+        if (preg_match('/^([A-Za-z]{2,8})\s*[-:]/', $subject_name, $matches)) {
+            return strtoupper($matches[1]);
+        }
+
+        $tokens = preg_split('/[\s\-_:()]+/', $subject_name, -1, PREG_SPLIT_NO_EMPTY);
+        if (!$tokens) {
+            return strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $subject_name), 0, 8));
+        }
+
+        $skip = ['and', 'of', 'the', 'to', 'for', 'in', 'on', 'with'];
+        $abbr = '';
+        foreach ($tokens as $token) {
+            if ($token === '' || in_array(strtolower($token), $skip, true)) {
+                continue;
+            }
+            $abbr .= strtoupper($token[0]);
+        }
+
+        if ($abbr === '') {
+            foreach ($tokens as $token) {
+                if ($token !== '') {
+                    $abbr .= strtoupper($token[0]);
+                }
+            }
+        }
+
+        return substr($abbr, 0, 8);
+    }
+}
+
 $pc_school = '';
 $pc_school_stmt = mysqli_prepare($conn, "SELECT u.school, u.department FROM users u WHERE u.id = ? LIMIT 1");
 if ($pc_school_stmt) {
@@ -77,86 +117,285 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
     }
 
     $student_id = (int)$_GET['id'];
-    $marks_sql = "SELECT s.subject_name,
-                         ic.id AS component_id,
-                         ic.component_name,
-                         ic.instances,
-                         ic.marks_per_instance,
-                         ic.total_marks,
-                         ic.scaled_total_marks,
-                         ism.marks,
-                         ism.instance_number
-                  FROM ica_student_marks ism
-                  JOIN ica_components ic ON ism.component_id = ic.id
-                  JOIN subjects s ON ic.subject_id = s.id
-                  WHERE ism.student_id = ?
-                  ORDER BY s.subject_name, ic.component_name, ism.instance_number";
 
-    $stmt = mysqli_prepare($conn, $marks_sql);
-    if (!$stmt) {
-        echo json_encode(['error' => 'Unable to load marks for the selected student.']);
+    $student_scope_stmt = mysqli_prepare($conn, "SELECT s.class_id,
+                                                        COALESCE(s.section_id, 0) AS section_id,
+                                                        c.school,
+                                                        c.semester,
+                                                        COALESCE(c.academic_term_id, 0) AS academic_term_id
+                                                 FROM students s
+                                                 JOIN classes c ON c.id = s.class_id
+                                                 WHERE s.id = ?
+                                                 LIMIT 1");
+    if (!$student_scope_stmt) {
+        echo json_encode(['error' => 'Unable to resolve student scope.']);
         exit;
     }
 
-    mysqli_stmt_bind_param($stmt, 'i', $student_id);
-    mysqli_stmt_execute($stmt);
-    $result = mysqli_stmt_get_result($stmt);
+    mysqli_stmt_bind_param($student_scope_stmt, 'i', $student_id);
+    mysqli_stmt_execute($student_scope_stmt);
+    $student_scope_res = mysqli_stmt_get_result($student_scope_stmt);
+    $student_scope = $student_scope_res ? mysqli_fetch_assoc($student_scope_res) : null;
+    mysqli_stmt_close($student_scope_stmt);
+
+    if (!$student_scope) {
+        echo json_encode(['error' => 'Student not found.']);
+        exit;
+    }
+
+    $student_class_id = (int)($student_scope['class_id'] ?? 0);
+    $student_section_id = (int)($student_scope['section_id'] ?? 0);
+    $student_school = trim((string)($student_scope['school'] ?? ''));
+    $student_semester = trim((string)($student_scope['semester'] ?? ''));
+
+    $scope_conditions = [
+        'tsa.class_id = ' . $student_class_id,
+        '(tsa.section_id IS NULL OR tsa.section_id = 0 OR tsa.section_id = ' . $student_section_id . ')'
+    ];
+    if ($student_semester !== '') {
+        $scope_conditions[] = "c_scope.semester = '" . mysqli_real_escape_string($conn, $student_semester) . "'";
+    }
+
+    $assigned_subjects_sql = "SELECT DISTINCT subj.id AS subject_id, subj.subject_name
+                             FROM teacher_subject_assignments tsa
+                             JOIN subjects subj ON subj.id = tsa.subject_id
+                             JOIN classes c_scope ON c_scope.id = tsa.class_id
+                             WHERE " . implode(' AND ', $scope_conditions) . "
+                             ORDER BY subj.subject_name";
+    $assigned_subjects_res = mysqli_query($conn, $assigned_subjects_sql);
+
+    $assigned_subjects = [];
+    if ($assigned_subjects_res) {
+        while ($subject_row = mysqli_fetch_assoc($assigned_subjects_res)) {
+            $sid = (int)($subject_row['subject_id'] ?? 0);
+            if ($sid <= 0) {
+                continue;
+            }
+            $assigned_subjects[$sid] = (string)($subject_row['subject_name'] ?? ('Subject ' . $sid));
+        }
+        mysqli_free_result($assigned_subjects_res);
+    }
+
+    // Ensure historical marks are visible even when assignment rows are missing for that semester snapshot.
+    $marked_subjects_sql = "SELECT DISTINCT subj.id AS subject_id, subj.subject_name
+                            FROM ica_student_marks ism
+                            JOIN ica_components ic ON ic.id = ism.component_id
+                            JOIN subjects subj ON subj.id = ic.subject_id
+                            WHERE ism.student_id = " . $student_id . "
+                            ORDER BY subj.subject_name";
+    $marked_subjects_res = mysqli_query($conn, $marked_subjects_sql);
+    if ($marked_subjects_res) {
+        while ($marked_row = mysqli_fetch_assoc($marked_subjects_res)) {
+            $sid = (int)($marked_row['subject_id'] ?? 0);
+            if ($sid <= 0) {
+                continue;
+            }
+            if (!isset($assigned_subjects[$sid])) {
+                $assigned_subjects[$sid] = (string)($marked_row['subject_name'] ?? ('Subject ' . $sid));
+            }
+        }
+        mysqli_free_result($marked_subjects_res);
+    }
 
     $subject_components = [];
+    $subject_faculty_map = [];
+    $subject_topper_map = [];
+    foreach ($assigned_subjects as $sid => $subject_name) {
+        $subject_components[$sid] = [];
+        $subject_faculty_map[$sid] = [];
+    }
 
-    while ($row = mysqli_fetch_assoc($result)) {
-        $subject = $row['subject_name'] ?? 'Unknown Subject';
-        $component_id = isset($row['component_id']) ? (int)$row['component_id'] : 0;
+    if (!empty($assigned_subjects)) {
+        $subject_id_list = implode(',', array_map('intval', array_keys($assigned_subjects)));
 
-        if (!isset($subject_components[$subject])) {
-            $subject_components[$subject] = [];
+        $faculty_sql = "SELECT tsa.subject_id, u.name AS faculty_name
+                        FROM teacher_subject_assignments tsa
+                        JOIN users u ON u.id = tsa.teacher_id
+                        WHERE tsa.class_id = " . $student_class_id . "
+                          AND (tsa.section_id IS NULL OR tsa.section_id = 0 OR tsa.section_id = " . $student_section_id . ")
+                          AND tsa.subject_id IN (" . $subject_id_list . ")";
+        $faculty_res = mysqli_query($conn, $faculty_sql);
+        if ($faculty_res) {
+            while ($faculty_row = mysqli_fetch_assoc($faculty_res)) {
+                $sid = (int)($faculty_row['subject_id'] ?? 0);
+                if ($sid <= 0 || !isset($subject_faculty_map[$sid])) {
+                    continue;
+                }
+                $faculty_name_raw = trim((string)($faculty_row['faculty_name'] ?? ''));
+                if ($faculty_name_raw === '') {
+                    continue;
+                }
+                $faculty_name_display = format_person_display($faculty_name_raw);
+                if (!in_array($faculty_name_display, $subject_faculty_map[$sid], true)) {
+                    $subject_faculty_map[$sid][] = $faculty_name_display;
+                }
+            }
+            mysqli_free_result($faculty_res);
         }
 
-        if (!isset($subject_components[$subject][$component_id])) {
-            $instances = isset($row['instances']) ? (int)$row['instances'] : 1;
-            if ($instances <= 0) {
-                $instances = 1;
+        $subject_marks_sql = "SELECT subj.id AS subject_id,
+                                     subj.subject_name,
+                                     ic.id AS component_id,
+                                     ic.component_name,
+                                     ic.instances,
+                                     ic.marks_per_instance,
+                                     ic.total_marks,
+                                     ic.scaled_total_marks,
+                                     ism.marks,
+                                     ism.instance_number
+                              FROM subjects subj
+                              LEFT JOIN ica_components ic
+                                ON ic.subject_id = subj.id
+                               AND (ic.class_id IS NULL OR ic.class_id = 0 OR ic.class_id = " . $student_class_id . ")
+                              LEFT JOIN ica_student_marks ism
+                                ON ism.component_id = ic.id
+                               AND ism.student_id = " . $student_id . "
+                              WHERE subj.id IN (" . $subject_id_list . ")
+                              ORDER BY subj.subject_name, ic.component_name, ism.instance_number";
+        $subject_marks_res = mysqli_query($conn, $subject_marks_sql);
+
+        if ($subject_marks_res) {
+            while ($row = mysqli_fetch_assoc($subject_marks_res)) {
+                $sid = isset($row['subject_id']) ? (int)$row['subject_id'] : 0;
+                if ($sid <= 0 || !isset($subject_components[$sid])) {
+                    continue;
+                }
+
+                $component_id = isset($row['component_id']) ? (int)$row['component_id'] : 0;
+                if ($component_id <= 0) {
+                    continue;
+                }
+
+                if (!isset($subject_components[$sid][$component_id])) {
+                    $instances = isset($row['instances']) ? (int)$row['instances'] : 1;
+                    if ($instances <= 0) {
+                        $instances = 1;
+                    }
+
+                    $marks_per_instance = isset($row['marks_per_instance']) ? (float)$row['marks_per_instance'] : 0.0;
+                    $raw_capacity = isset($row['total_marks']) ? (float)$row['total_marks'] : 0.0;
+                    if ($raw_capacity <= 0 && $marks_per_instance > 0) {
+                        $raw_capacity = $marks_per_instance * $instances;
+                    }
+
+                    $scaled_total = isset($row['scaled_total_marks']) ? (float)$row['scaled_total_marks'] : 0.0;
+                    if ($scaled_total <= 0 && $raw_capacity > 0) {
+                        $scaled_total = $raw_capacity;
+                    }
+
+                    $scale_ratio = ($raw_capacity > 0 && $scaled_total > 0)
+                        ? ($scaled_total / $raw_capacity)
+                        : 1.0;
+
+                    $subject_components[$sid][$component_id] = [
+                        'component_name' => $row['component_name'] ?? 'Component',
+                        'instances' => $instances,
+                        'max_total' => $scaled_total,
+                        'scale_ratio' => $scale_ratio,
+                        'raw_total' => 0.0,
+                        'has_any' => false,
+                        'has_numeric' => false,
+                    ];
+                }
+
+                $subject_components[$sid][$component_id]['has_any'] = true;
+                if ($row['marks'] !== null) {
+                    $subject_components[$sid][$component_id]['raw_total'] += (float)$row['marks'];
+                    $subject_components[$sid][$component_id]['has_numeric'] = true;
+                }
             }
-
-            $marks_per_instance = isset($row['marks_per_instance']) ? (float)$row['marks_per_instance'] : 0.0;
-            $raw_capacity = isset($row['total_marks']) ? (float)$row['total_marks'] : 0.0;
-            if ($raw_capacity <= 0 && $marks_per_instance > 0) {
-                $raw_capacity = $marks_per_instance * $instances;
-            }
-
-            $scaled_total = isset($row['scaled_total_marks']) ? (float)$row['scaled_total_marks'] : 0.0;
-            if ($scaled_total <= 0 && $raw_capacity > 0) {
-                $scaled_total = $raw_capacity;
-            }
-
-            $scale_ratio = ($raw_capacity > 0 && $scaled_total > 0)
-                ? ($scaled_total / $raw_capacity)
-                : 1.0;
-
-            $subject_components[$subject][$component_id] = [
-                'component_name' => $row['component_name'] ?? 'Component',
-                'instances' => $instances,
-                'max_total' => $scaled_total,
-                'scale_ratio' => $scale_ratio,
-                'raw_total' => 0.0,
-                'has_any' => false,
-                'has_numeric' => false,
-            ];
+            mysqli_free_result($subject_marks_res);
         }
 
-        $subject_components[$subject][$component_id]['has_any'] = true;
-        if ($row['marks'] !== null) {
-            $subject_components[$subject][$component_id]['raw_total'] += (float)$row['marks'];
-            $subject_components[$subject][$component_id]['has_numeric'] = true;
+        $section_scope_condition = $student_section_id > 0
+            ? ('COALESCE(st_scope.section_id, 0) = ' . $student_section_id)
+            : '1=1';
+        $topper_sql = "SELECT st_scope.id AS student_id,
+                              st_scope.name AS student_name,
+                              ic.subject_id,
+                              ism.marks,
+                              ic.instances,
+                              ic.marks_per_instance,
+                              ic.total_marks,
+                              ic.scaled_total_marks
+                       FROM students st_scope
+                       JOIN ica_student_marks ism ON ism.student_id = st_scope.id
+                       JOIN ica_components ic ON ic.id = ism.component_id
+                       WHERE st_scope.class_id = " . $student_class_id . "
+                         AND " . $section_scope_condition . "
+                         AND ic.subject_id IN (" . $subject_id_list . ")
+                         AND ism.marks IS NOT NULL";
+        $topper_res = mysqli_query($conn, $topper_sql);
+        if ($topper_res) {
+            $subject_student_scores = [];
+            $subject_student_names = [];
+            while ($topper_row = mysqli_fetch_assoc($topper_res)) {
+                $sid = (int)($topper_row['subject_id'] ?? 0);
+                $scope_student_id = (int)($topper_row['student_id'] ?? 0);
+                if ($sid <= 0 || $scope_student_id <= 0) {
+                    continue;
+                }
+
+                $instances = isset($topper_row['instances']) ? (int)$topper_row['instances'] : 1;
+                if ($instances <= 0) {
+                    $instances = 1;
+                }
+                $marks_per_instance = isset($topper_row['marks_per_instance']) ? (float)$topper_row['marks_per_instance'] : 0.0;
+                $raw_capacity = isset($topper_row['total_marks']) ? (float)$topper_row['total_marks'] : 0.0;
+                if ($raw_capacity <= 0 && $marks_per_instance > 0) {
+                    $raw_capacity = $marks_per_instance * $instances;
+                }
+                $scaled_total = isset($topper_row['scaled_total_marks']) ? (float)$topper_row['scaled_total_marks'] : 0.0;
+                if ($scaled_total <= 0 && $raw_capacity > 0) {
+                    $scaled_total = $raw_capacity;
+                }
+                $scale_ratio = ($raw_capacity > 0 && $scaled_total > 0)
+                    ? ($scaled_total / $raw_capacity)
+                    : 1.0;
+                $scaled_mark = ((float)$topper_row['marks']) * $scale_ratio;
+
+                $score_key = $sid . ':' . $scope_student_id;
+                if (!isset($subject_student_scores[$score_key])) {
+                    $subject_student_scores[$score_key] = 0.0;
+                }
+                $subject_student_scores[$score_key] += $scaled_mark;
+                $subject_student_names[$score_key] = format_person_display(trim((string)($topper_row['student_name'] ?? '')));
+            }
+            mysqli_free_result($topper_res);
+
+            foreach ($subject_student_scores as $score_key => $total_score) {
+                [$sid_text] = explode(':', $score_key, 2);
+                $sid = (int)$sid_text;
+                if (!isset($subject_topper_map[$sid]) || $total_score > (float)$subject_topper_map[$sid]['marks']) {
+                    $subject_topper_map[$sid] = [
+                        'marks' => round($total_score, 2),
+                        'student_name' => $subject_student_names[$score_key] ?? ''
+                    ];
+                }
+            }
         }
     }
 
-    mysqli_stmt_close($stmt);
-
     $subjects_payload = [];
-    foreach ($subject_components as $subject => $components) {
-        $subjects_payload[$subject] = [];
-        foreach ($components as $component) {
+    $subject_faculty_payload = [];
+    $all_subjects_rows = [];
+    foreach ($assigned_subjects as $sid => $subject_name) {
+        $subject_label = trim($subject_name) !== '' ? trim($subject_name) : ('Subject ' . $sid);
+        if (isset($subjects_payload[$subject_label])) {
+            $subject_label .= ' (#' . $sid . ')';
+        }
+
+        $assigned_faculty = !empty($subject_faculty_map[$sid])
+            ? implode(', ', $subject_faculty_map[$sid])
+            : 'Not Assigned';
+        $subject_faculty_payload[$subject_label] = $assigned_faculty;
+        $subject_short = build_subject_short_label($subject_label);
+
+        $subjects_payload[$subject_label] = [];
+        $subject_total = 0.0;
+        $subject_has_numeric = false;
+
+        foreach (($subject_components[$sid] ?? []) as $component) {
             $label = build_component_sum_label($component['component_name'], $component['instances'], $component['max_total']);
             $is_absent = !$component['has_numeric'] && $component['has_any'];
             $scaled_mark = null;
@@ -164,60 +403,38 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_student_details') {
                 $ratio = isset($component['scale_ratio']) ? (float)$component['scale_ratio'] : 1.0;
                 $raw_total = isset($component['raw_total']) ? (float)$component['raw_total'] : 0.0;
                 $scaled_mark = $raw_total * $ratio;
+                $subject_total += $scaled_mark;
+                $subject_has_numeric = true;
             }
 
-            $subjects_payload[$subject][] = [
+            $subjects_payload[$subject_label][] = [
                 'component_name' => $label,
-                'marks' => $component['has_numeric'] ? $scaled_mark : null,
+                'marks' => $component['has_numeric'] ? round($scaled_mark, 2) : null,
                 'max_marks' => $component['max_total'],
                 'is_absent' => $is_absent,
+                'assigned_faculty' => $assigned_faculty,
+                'short_label' => $subject_short,
+                'top_student_name' => $subject_topper_map[$sid]['student_name'] ?? '',
             ];
         }
-    }
 
-    $all_subjects = [];
-    foreach ($subjects_payload as $components) {
-        foreach ($components as $component) {
-            $label = $component['component_name'];
-            if (!isset($all_subjects[$label])) {
-                $all_subjects[$label] = [
-                    'total' => 0.0,
-                    'max_total' => 0.0,
-                    'entries' => 0,
-                    'numeric_entries' => 0,
-                    'absent_entries' => 0,
-                ];
-            }
-
-            $all_subjects[$label]['max_total'] += (float)$component['max_marks'];
-            $all_subjects[$label]['entries']++;
-
-            if (!empty($component['is_absent'])) {
-                $all_subjects[$label]['absent_entries']++;
-            }
-
-            if ($component['marks'] !== null) {
-                $all_subjects[$label]['total'] += (float)$component['marks'];
-                $all_subjects[$label]['numeric_entries']++;
-            }
-        }
-    }
-
-    $subjects_payload['All Subjects'] = [];
-    foreach ($all_subjects as $label => $aggregate) {
-        $has_numeric = $aggregate['numeric_entries'] > 0;
-        $avg_marks = $has_numeric ? $aggregate['total'] / $aggregate['numeric_entries'] : null;
-        $avg_max = $aggregate['entries'] > 0 ? $aggregate['max_total'] / $aggregate['entries'] : 0.0;
-
-        $subjects_payload['All Subjects'][] = [
-            'component_name' => $label,
-            'marks' => $has_numeric ? $avg_marks : null,
-            'max_marks' => $avg_max,
-            'is_absent' => !$has_numeric && $aggregate['absent_entries'] > 0,
+        $all_subjects_rows[] = [
+            'component_name' => $subject_label,
+            'marks' => $subject_has_numeric ? round($subject_total, 2) : null,
+            'max_marks' => isset($subject_topper_map[$sid]) ? (float)$subject_topper_map[$sid]['marks'] : null,
+            'is_absent' => !$subject_has_numeric,
+            'assigned_faculty' => $assigned_faculty,
+            'short_label' => $subject_short,
+            'top_student_name' => $subject_topper_map[$sid]['student_name'] ?? '',
         ];
     }
 
-    echo json_encode(['subjects' => $subjects_payload]);
+    $subjects_payload['All Subjects'] = $all_subjects_rows;
+
+    echo json_encode([
+        'subjects' => $subjects_payload,
+        'subject_faculty' => $subject_faculty_payload,
+    ]);
     exit;
 }
 
@@ -229,7 +446,22 @@ if ($school_param_provided) {
 } elseif ($pc_school !== '') {
     $school_filter = $pc_school;
 }
-$semester_filter = isset($_GET['semester']) && $_GET['semester'] !== '' ? trim($_GET['semester']) : '';
+$contextSchool = $school_filter !== '' ? $school_filter : $pc_school;
+$academicContext = resolveAcademicContext($conn, [
+    'school_name' => $contextSchool
+]);
+$timeline_semester = '';
+if (isset($academicContext['active']['semester_number']) && $academicContext['active']['semester_number'] !== null) {
+    $timeline_semester = trim((string)$academicContext['active']['semester_number']);
+}
+
+$semester_param_provided = array_key_exists('semester', $_GET);
+$semester_filter = ($semester_param_provided && isset($_GET['semester']) && $_GET['semester'] !== '')
+    ? trim($_GET['semester'])
+    : '';
+if (!$semester_param_provided && $timeline_semester !== '') {
+    $semester_filter = $timeline_semester;
+}
 $class_filter = isset($_GET['class_id']) && $_GET['class_id'] !== '' ? (int)$_GET['class_id'] : 0;
 $section_filter = isset($_GET['section_id']) && $_GET['section_id'] !== '' ? (int)$_GET['section_id'] : 0;
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
@@ -260,10 +492,22 @@ if ($pc_school !== '' && !in_array($pc_school, $available_schools, true)) {
 
 $semesters = [];
 if ($school_filter !== '') {
-    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ? ORDER BY CAST(semester AS UNSIGNED)";
+    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ?";
+    $sem_types = 's';
+    $sem_params = [$school_filter];
+    if ($timeline_semester !== '') {
+        $sem_sql .= " AND semester = ?";
+        $sem_types .= 's';
+        $sem_params[] = $timeline_semester;
+    }
+    $sem_sql .= " ORDER BY CAST(semester AS UNSIGNED)";
     $sem_stmt = mysqli_prepare($conn, $sem_sql);
     if ($sem_stmt) {
-        mysqli_stmt_bind_param($sem_stmt, "s", $school_filter);
+        if ($sem_types === 's') {
+            mysqli_stmt_bind_param($sem_stmt, 's', $sem_params[0]);
+        } else {
+            mysqli_stmt_bind_param($sem_stmt, 'ss', $sem_params[0], $sem_params[1]);
+        }
         mysqli_stmt_execute($sem_stmt);
         $sem_res = mysqli_stmt_get_result($sem_stmt);
         if ($sem_res) {
@@ -347,17 +591,10 @@ if ($filters_applied) {
                  FROM students s
                  JOIN classes c ON s.class_id = c.id
                  LEFT JOIN sections sec ON s.section_id = sec.id
-                 JOIN (
-                        SELECT s2.sap_id, MAX(CAST(c2.semester AS UNSIGNED)) AS max_semester
-                        FROM students s2
-                        JOIN classes c2 ON s2.class_id = c2.id
-                        WHERE c2.school = ?
-                        GROUP BY s2.sap_id
-                 ) latest_class ON s.sap_id = latest_class.sap_id AND CAST(c.semester AS UNSIGNED) = latest_class.max_semester
                  WHERE c.school = ?";
 
-    $types = 'ss';
-    $params = [$school_filter, $school_filter];
+    $types = 's';
+    $params = [$school_filter];
 
     if ($semester_filter !== '') {
         $base_sql .= " AND c.semester = ?";
@@ -554,8 +791,9 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
         .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
         body.dark-mode .modal-content { background-color: #5a5a5a; color: #e0e0e0; }
         body.dark-mode .modal-header { border-bottom: 1px solid #777; }
-        #studentDetailChartContainer { height: 250px; }
+        #studentDetailChartContainer { height: 340px; width: 100%; }
         .modal-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-content { width: 88%; max-width: 1080px; }
     </style>
 </head>
 <body class="program-chair">
@@ -576,6 +814,10 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
         </div>
         <div class="main-content">
             <div class="header"><h2>Student Progress Analysis</h2></div>
+            <?php renderTermSwitcher($academicContext, [
+                'school_name' => $contextSchool,
+                'fallback_semester' => $semester_filter !== '' ? $semester_filter : null,
+            ]); ?>
             <div class="container">
                 <div class="card">
                     <div class="card-header"><div style="display: flex; justify-content: space-between; align-items: center;"><h5>Filters</h5></div></div>
@@ -602,11 +844,15 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                                 </div>
                                 <div class="form-group">
                                     <label>Class</label>
-                                    <select name="class_id" id="class_filter">
-                                        <option value="">All classes</option>
-                                        <?php foreach ($classes_list as $class_option): ?>
-                                            <option value="<?php echo (int)$class_option['id']; ?>" <?php echo $class_filter === (int)$class_option['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($class_option['class_name']); ?></option>
-                                        <?php endforeach; ?>
+                                    <select name="class_id" id="class_filter" <?php echo $semester_filter === '' ? 'disabled' : ''; ?>>
+                                        <?php if ($semester_filter === ''): ?>
+                                            <option value="" selected>Select semester</option>
+                                        <?php else: ?>
+                                            <option value="">All classes</option>
+                                            <?php foreach ($classes_list as $class_option): ?>
+                                                <option value="<?php echo (int)$class_option['id']; ?>" <?php echo $class_filter === (int)$class_option['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($class_option['class_name']); ?></option>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
                                     </select>
                                 </div>
                                 <div class="form-group" id="section_filter_container" <?php echo empty($sections_list) ? 'style="display:none;"' : ''; ?>>
@@ -731,13 +977,16 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             <div class="modal-header"><h4 id="modalStudentName"></h4><span class="close">&times;</span></div>
             <div id="modalBody">
                 <div class="modal-controls">
-                    <h5>Performance Overview</h5>
+                    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                        <h5 style="margin:0;">Performance Overview</h5>
+                        <span id="assignedFacultyInfo" style="font-size:0.92rem; color:#475569; font-weight:600;"></span>
+                    </div>
                     <div class="form-group"><select id="subjectFilter" class="form-control" style="width: auto;"></select></div>
                 </div>
                 <div id="studentDetailChartContainer"><canvas id="studentDetailChart"></canvas></div>
-                <h5 style="margin-top: 20px;">Component-wise Marks</h5>
+                <h5 id="modalMarksTitle" style="margin-top: 20px;">Component-wise Marks</h5>
                 <table id="modalMarksTable">
-                    <thead><tr><th>Component</th><th>Marks Obtained</th><th>Max Marks</th></tr></thead>
+                    <thead><tr><th id="modalPrimaryColumn">Component</th><th>Marks Obtained</th><th>Max Marks</th><th id="modalFacultyColumn">Assigned Faculty</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -759,6 +1008,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             const currentClass = <?php echo json_encode($class_filter > 0 ? $class_filter : ''); ?>;
             const currentSection = <?php echo json_encode($section_filter > 0 ? $section_filter : ''); ?>;
             const currentStatus = <?php echo json_encode($status_filter); ?>;
+            const timelineSemester = <?php echo json_encode($timeline_semester); ?>;
 
             if (statusFilter && currentStatus !== null) {
                 statusFilter.value = currentStatus;
@@ -774,7 +1024,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
 
             function populateSemesters(school, selectedSemester, selectedClass, selectedSection) {
                 semFilter.innerHTML = '<option value="">All semesters</option>';
-                classFilter.innerHTML = '<option value="">All classes</option>';
+                classFilter.innerHTML = '<option value="">Select semester</option>';
+                classFilter.disabled = true;
                 sectionFilter.innerHTML = '<option value="">All divisions</option>';
                 sectionContainer.style.display = 'none';
 
@@ -785,7 +1036,15 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                 fetch(`get_semesters.php?school=${encodeURIComponent(school)}`)
                     .then(response => response.json())
                     .then(data => {
-                        data.forEach(item => {
+                        const filteredSemesters = Array.isArray(data)
+                            ? data.filter(item => !timelineSemester || String(item.semester) === String(timelineSemester))
+                            : [];
+
+                        if (!selectedSemester && timelineSemester) {
+                            selectedSemester = timelineSemester;
+                        }
+
+                        filteredSemesters.forEach(item => {
                             const option = document.createElement('option');
                             option.value = item.semester;
                             option.textContent = `Semester ${item.semester}`;
@@ -797,6 +1056,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
 
                         if (selectedSemester) {
                             populateClasses(school, selectedSemester, selectedClass, selectedSection);
+                        } else if (timelineSemester && filteredSemesters.length) {
+                            populateClasses(school, timelineSemester, selectedClass, selectedSection);
                         }
                     })
                     .catch(() => {});
@@ -804,10 +1065,13 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
 
             function populateClasses(school, semester, selectedClass, selectedSection) {
                 classFilter.innerHTML = '<option value="">All classes</option>';
+                classFilter.disabled = false;
                 sectionFilter.innerHTML = '<option value="">All divisions</option>';
                 sectionContainer.style.display = 'none';
 
                 if (!school || !semester) {
+                    classFilter.innerHTML = '<option value="">Select semester</option>';
+                    classFilter.disabled = true;
                     return;
                 }
 
@@ -879,7 +1143,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             if (currentSchool) {
                 populateSemesters(currentSchool, currentSem, currentClass, currentSection);
                 if (!currentSem) {
-                    classFilter.innerHTML = '<option value="">All classes</option>';
+                    classFilter.innerHTML = '<option value="">Select semester</option>';
+                    classFilter.disabled = true;
                 }
             }
             if (currentClass) {
@@ -931,6 +1196,10 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             const modal = document.getElementById('studentDetailModal');
             const closeBtn = modal.querySelector('.close');
             const subjectFilter = document.getElementById('subjectFilter');
+            const modalMarksTitle = document.getElementById('modalMarksTitle');
+            const modalPrimaryColumn = document.getElementById('modalPrimaryColumn');
+            const modalFacultyInfo = document.getElementById('assignedFacultyInfo');
+            const modalFacultyColumn = document.getElementById('modalFacultyColumn');
             let detailChart = null;
             let studentData = null;
 
@@ -949,7 +1218,26 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                 }
 
                 const components = selectedSubject ? (studentData.subjects[selectedSubject] || []) : [];
-                const labels = components.map(item => item.component_name);
+                const isAllSubjects = selectedSubject === 'All Subjects';
+                if (modalMarksTitle) {
+                    modalMarksTitle.textContent = isAllSubjects ? 'Subject-wise Marks' : 'Component-wise Marks';
+                }
+                if (modalPrimaryColumn) {
+                    modalPrimaryColumn.textContent = isAllSubjects ? 'Subject' : 'Component';
+                }
+                const selectedFaculty = !isAllSubjects && studentData.subject_faculty
+                    ? (studentData.subject_faculty[selectedSubject] || 'Not Assigned')
+                    : '';
+                if (modalFacultyInfo) {
+                    modalFacultyInfo.textContent = !isAllSubjects ? `Assigned Faculty: ${selectedFaculty}` : '';
+                }
+                if (modalFacultyColumn) {
+                    modalFacultyColumn.style.display = isAllSubjects ? '' : 'none';
+                }
+
+                const labels = components.map(item => isAllSubjects ? (item.short_label || item.component_name) : item.component_name);
+                const fullLabels = components.map(item => item.component_name || '');
+                const topperNames = components.map(item => item.top_student_name || '');
                 const marks = components.map(item => {
                     if (!item) {
                         return null;
@@ -962,35 +1250,71 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                     return Number.isFinite(numeric) ? numeric : null;
                 });
                 const maxMarks = components.map(item => {
-                    const numeric = Number(item && item.max_marks);
-                    return Number.isFinite(numeric) ? numeric : 0;
+                    if (!item || item.max_marks === null || item.max_marks === undefined || item.max_marks === '') {
+                        return null;
+                    }
+                    const numeric = Number(item.max_marks);
+                    return Number.isFinite(numeric) ? numeric : null;
                 });
 
-                if (!detailChart) {
-                    const ctx = document.getElementById('studentDetailChart').getContext('2d');
-                    detailChart = new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels,
-                            datasets: [
-                                { label: 'Marks Obtained', data: marks, backgroundColor: 'rgba(166, 25, 46, 0.7)' },
-                                { label: 'Max Marks', data: maxMarks, backgroundColor: 'rgba(54, 162, 235, 0.5)' }
-                            ]
+                if (detailChart) {
+                    detailChart.destroy();
+                }
+
+                const ctx = document.getElementById('studentDetailChart').getContext('2d');
+                detailChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            { label: 'Marks Obtained', data: marks, backgroundColor: 'rgba(166, 25, 46, 0.78)' },
+                            { label: 'Max Marks', data: maxMarks, backgroundColor: 'rgba(54, 162, 235, 0.55)' }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    title: (tooltipItems) => {
+                                        if (!tooltipItems.length) {
+                                            return '';
+                                        }
+                                        const idx = tooltipItems[0].dataIndex;
+                                        return fullLabels[idx] || '';
+                                    },
+                                    label: (ctxInfo) => {
+                                        const idx = ctxInfo.dataIndex;
+                                        const rawValue = ctxInfo.raw;
+                                        const baseLabel = ctxInfo.dataset.label || '';
+                                        if (rawValue === null || rawValue === undefined) {
+                                            return `${baseLabel}: Not Assigned`;
+                                        }
+                                        let line = `${baseLabel}: ${formatNumericValue(rawValue)}`;
+                                        if (isAllSubjects && ctxInfo.datasetIndex === 1 && topperNames[idx]) {
+                                            line += ` (Topper: ${topperNames[idx]})`;
+                                        }
+                                        return line;
+                                    }
+                                }
+                            }
                         },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            scales: {
-                                y: { beginAtZero: true, ticks: { precision: 0 } }
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { precision: 0 },
+                                suggestedMax: 50
+                            },
+                            x: {
+                                ticks: {
+                                    maxRotation: 30,
+                                    minRotation: 0
+                                }
                             }
                         }
-                    });
-                } else {
-                    detailChart.data.labels = labels;
-                    detailChart.data.datasets[0].data = marks;
-                    detailChart.data.datasets[1].data = maxMarks;
-                    detailChart.update();
-                }
+                    }
+                });
 
                 const tbody = document.querySelector('#modalMarksTable tbody');
                 tbody.innerHTML = '';
@@ -998,8 +1322,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                 if (!components.length) {
                     const row = document.createElement('tr');
                     const cell = document.createElement('td');
-                    cell.colSpan = 3;
-                    cell.textContent = 'No marks recorded for this selection.';
+                    cell.colSpan = isAllSubjects ? 4 : 3;
+                    cell.textContent = 'Not Assigned for this selection.';
                     row.appendChild(cell);
                     tbody.appendChild(row);
                     return;
@@ -1011,12 +1335,19 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                     nameCell.textContent = component.component_name;
                     const marksCell = document.createElement('td');
                     const componentAbsent = component.is_absent === true || component.marks === null || component.marks === undefined;
-                    marksCell.textContent = componentAbsent ? 'AB' : formatNumericValue(component.marks);
+                    marksCell.textContent = componentAbsent ? 'Not Assigned' : formatNumericValue(component.marks);
                     const maxCell = document.createElement('td');
-                    maxCell.textContent = formatNumericValue(component.max_marks);
+                    maxCell.textContent = (component.max_marks === null || component.max_marks === undefined || component.max_marks === '')
+                        ? ''
+                        : formatNumericValue(component.max_marks);
                     row.appendChild(nameCell);
                     row.appendChild(marksCell);
                     row.appendChild(maxCell);
+                    if (isAllSubjects) {
+                        const facultyCell = document.createElement('td');
+                        facultyCell.textContent = component.assigned_faculty || 'Not Assigned';
+                        row.appendChild(facultyCell);
+                    }
                     tbody.appendChild(row);
                 });
             }

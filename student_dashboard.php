@@ -1229,9 +1229,36 @@ $remainingPercent = max(0, 100 - $progressPercent);
 $classTimetables = [];
 $latestTimetable = null;
 if ($classId) {
-	$ttSql = "SELECT file_name, file_path, uploaded_at FROM class_timetables WHERE class_id = ? ORDER BY uploaded_at DESC LIMIT 3";
+	$hasTimetableSectionColumn = false;
+	$hasTimetableBroadcastColumn = false;
+	$sectionColumnName = mysqli_real_escape_string($conn, 'section_id');
+	$sectionColumnResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$sectionColumnName}'");
+	if ($sectionColumnResult) {
+		$hasTimetableSectionColumn = mysqli_num_rows($sectionColumnResult) > 0;
+		mysqli_free_result($sectionColumnResult);
+	}
+	$broadcastColumnName = mysqli_real_escape_string($conn, 'is_broadcast');
+	$broadcastColumnResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$broadcastColumnName}'");
+	if ($broadcastColumnResult) {
+		$hasTimetableBroadcastColumn = mysqli_num_rows($broadcastColumnResult) > 0;
+		mysqli_free_result($broadcastColumnResult);
+	}
+
+	$ttSql = "SELECT file_name, file_path, uploaded_at FROM class_timetables WHERE class_id = ?";
+	if ($hasTimetableSectionColumn) {
+		if ($hasTimetableBroadcastColumn) {
+			$ttSql .= " AND (COALESCE(section_id, 0) = ? OR (COALESCE(section_id, 0) = 0 AND COALESCE(is_broadcast, 0) = 1))";
+		} else {
+			$ttSql .= " AND COALESCE(section_id, 0) = ?";
+		}
+	}
+	$ttSql .= " ORDER BY uploaded_at DESC LIMIT 3";
 	if ($stmtTimetable = mysqli_prepare($conn, $ttSql)) {
-		mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
+		if ($hasTimetableSectionColumn) {
+			mysqli_stmt_bind_param($stmtTimetable, 'ii', $classId, $sectionId ?? 0);
+		} else {
+			mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
+		}
 		mysqli_stmt_execute($stmtTimetable);
 		$ttRes = mysqli_stmt_get_result($stmtTimetable);
 		while ($row = mysqli_fetch_assoc($ttRes)) {
@@ -1258,7 +1285,7 @@ if ($classId) {
 	<style>
 		html, body.student-dashboard { overflow-x: hidden; }
 		body.student-dashboard .dashboard { width: 100%; overflow-x: hidden; }
-		body.student-dashboard .main-content { padding: 12px 16px 16px; }
+		body.student-dashboard .main-content { padding: 12px 16px 0; }
 		body.student-dashboard .main-content { width: 100% !important; max-width: 100% !important; min-width: 0; }
 		body.student-dashboard .header { margin-bottom: 12px; padding: 12px 16px; }
 		body.student-dashboard .header h2 { font-size: 1.95rem; }
@@ -1328,10 +1355,10 @@ if ($classId) {
 			font-size: 0.84rem;
 		}
 		body.student-dashboard .footer-bottom {
-			margin: 12px 0 0;
+			margin: auto -16px 0;
 			padding: 12px 16px;
 			font-size: 0.82rem;
-			border-radius: 8px;
+			border-radius: 0;
 		}
 		body.student-dashboard .compact-timetable .todo-item-link {
 			padding: 4px 10px;
@@ -1359,10 +1386,11 @@ if ($classId) {
 			}
 		}
 		@media (max-width: 768px) {
-			body.student-dashboard .main-content { padding: 10px; }
+			body.student-dashboard .main-content { padding: 10px 10px 0; }
 			body.student-dashboard .header { padding: 10px 12px; }
 			body.student-dashboard .header h2 { font-size: 1.8rem; }
 			body.student-dashboard .card-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+			body.student-dashboard .footer-bottom { margin: auto -10px 0; }
 		}
 	</style>
 </head>

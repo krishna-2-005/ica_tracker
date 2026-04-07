@@ -231,7 +231,7 @@ mysqli_close($conn);
         <h2>ICA Tracker</h2>
         <a href="system_admin_dashboard.php"><i class="fas fa-shield-alt"></i> <span>Dashboard</span></a>
         <a href="system_admin_activity_feed.php" class="active"><i class="fas fa-stream"></i> <span>Activity Feed</span></a>
-        <a href="system_admin_export_sql.php"><i class="fas fa-database"></i> <span>SQL Snapshot</span></a>
+        <a href="system_admin_export_sql.php"><i class="fas fa-database"></i> <span>Backup & Restore</span></a>
         <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
     </div>
     <div class="main-content">

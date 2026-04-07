@@ -10,6 +10,26 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'program_chair') {
     exit;
 }
 
+function columnExists(mysqli $conn, string $table, string $column): bool
+{
+    $table = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $column = preg_replace('/[^A-Za-z0-9_]/', '', $column);
+    if ($table === '' || $column === '') {
+        return false;
+    }
+    $check = mysqli_query($conn, "SHOW COLUMNS FROM `{$table}` LIKE '{$column}'");
+    $exists = $check && mysqli_num_rows($check) > 0;
+    if ($check) {
+        mysqli_free_result($check);
+    }
+    return $exists;
+}
+
+$subject_has_school = columnExists($conn, 'subjects', 'school');
+$subject_has_department = columnExists($conn, 'subjects', 'department');
+$class_has_school = columnExists($conn, 'classes', 'school');
+$class_has_department = columnExists($conn, 'classes', 'department');
+
 $pc_school = '';
 $pc_school_stmt = mysqli_prepare($conn, "SELECT u.school, u.department FROM users u WHERE u.id = ? LIMIT 1");
 if ($pc_school_stmt) {
@@ -56,7 +76,7 @@ $fetch_teacher_student_rows = static function (
     ?string $term_start_bound,
     ?string $term_end_bound,
     bool $collect_rows = true
-): array {
+ ) use ($subject_has_school, $subject_has_department, $class_has_school, $class_has_department): array {
     $normalized_status = $status_filter === 'all' ? '' : $status_filter;
 
     $marksDateClause = '';
@@ -101,9 +121,38 @@ $fetch_teacher_student_rows = static function (
         $params[] = $term_end_bound;
     }
     if ($school_filter !== '') {
-        $query .= " AND sub.school = ?";
-        $types .= 's';
-        $params[] = $school_filter;
+        $school_clauses = [];
+        if ($subject_has_school) {
+            $school_clauses[] = 'sub.school = ?';
+            $types .= 's';
+            $params[] = $school_filter;
+        }
+        if ($subject_has_department) {
+            if ($subject_has_school) {
+                $school_clauses[] = "((sub.school IS NULL OR sub.school = '') AND sub.department = ?)";
+            } else {
+                $school_clauses[] = 'sub.department = ?';
+            }
+            $types .= 's';
+            $params[] = $school_filter;
+        }
+        if ($class_has_school) {
+            $school_clauses[] = 'c.school = ?';
+            $types .= 's';
+            $params[] = $school_filter;
+        }
+        if ($class_has_department) {
+            if ($class_has_school) {
+                $school_clauses[] = "((c.school IS NULL OR c.school = '') AND c.department = ?)";
+            } else {
+                $school_clauses[] = 'c.department = ?';
+            }
+            $types .= 's';
+            $params[] = $school_filter;
+        }
+        if (!empty($school_clauses)) {
+            $query .= ' AND (' . implode(' OR ', $school_clauses) . ')';
+        }
     }
     if ($class_filter > 0) {
         $query .= " AND stu.class_id = ?";
@@ -317,9 +366,24 @@ $class_conditions = [];
 $class_types = '';
 $class_params = [];
 if ($selected_school !== '') {
-    $class_conditions[] = 'school = ?';
-    $class_types .= 's';
-    $class_params[] = $selected_school;
+    $school_where = [];
+    if ($class_has_school) {
+        $school_where[] = 'school = ?';
+        $class_types .= 's';
+        $class_params[] = $selected_school;
+    }
+    if ($class_has_department) {
+        if ($class_has_school) {
+            $school_where[] = "((school IS NULL OR school = '') AND department = ?)";
+        } else {
+            $school_where[] = 'department = ?';
+        }
+        $class_types .= 's';
+        $class_params[] = $selected_school;
+    }
+    if (!empty($school_where)) {
+        $class_conditions[] = '(' . implode(' OR ', $school_where) . ')';
+    }
 }
 if ($activeTermId > 0) {
     $class_conditions[] = 'academic_term_id = ?';
@@ -358,14 +422,37 @@ if ($class_filter > 0 && !in_array($class_filter, $valid_class_ids, true)) {
 
 $subject_options = [];
 $subject_sql = "SELECT id, subject_name FROM subjects";
+$subject_types = '';
+$subject_params = [];
 if ($selected_school !== '') {
-    $subject_sql .= " WHERE school = ?";
+    $subject_school_conditions = [];
+    if ($subject_has_school) {
+        $subject_school_conditions[] = 'school = ?';
+        $subject_types .= 's';
+        $subject_params[] = $selected_school;
+    }
+    if ($subject_has_department) {
+        if ($subject_has_school) {
+            $subject_school_conditions[] = "((school IS NULL OR school = '') AND department = ?)";
+        } else {
+            $subject_school_conditions[] = 'department = ?';
+        }
+        $subject_types .= 's';
+        $subject_params[] = $selected_school;
+    }
+    if (!empty($subject_school_conditions)) {
+        $subject_sql .= ' WHERE (' . implode(' OR ', $subject_school_conditions) . ')';
+    }
 }
 $subject_sql .= " ORDER BY subject_name";
 $subject_stmt = mysqli_prepare($conn, $subject_sql);
 if ($subject_stmt) {
-    if ($selected_school !== '') {
-        mysqli_stmt_bind_param($subject_stmt, 's', $selected_school);
+    if ($subject_types !== '') {
+        if ($subject_types === 's') {
+            mysqli_stmt_bind_param($subject_stmt, 's', $subject_params[0]);
+        } elseif ($subject_types === 'ss') {
+            mysqli_stmt_bind_param($subject_stmt, 'ss', $subject_params[0], $subject_params[1]);
+        }
     }
     if (mysqli_stmt_execute($subject_stmt)) {
         $subject_res = mysqli_stmt_get_result($subject_stmt);
@@ -539,7 +626,20 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
         $courses_sql .= " AND c.academic_term_id = ?";
     }
     if ($selected_school !== '') {
-        $courses_sql .= " AND s.school = ?";
+        $course_school_conditions = [];
+        if ($subject_has_school) {
+            $course_school_conditions[] = 's.school = ?';
+        }
+        if ($subject_has_department) {
+            if ($subject_has_school) {
+                $course_school_conditions[] = "((s.school IS NULL OR s.school = '') AND s.department = ?)";
+            } else {
+                $course_school_conditions[] = 's.department = ?';
+            }
+        }
+        if (!empty($course_school_conditions)) {
+            $courses_sql .= ' AND (' . implode(' OR ', $course_school_conditions) . ')';
+        }
     }
 
     $courses_sql .= "
@@ -567,8 +667,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
             $bindValues[] = $activeTermId;
         }
         if ($selected_school !== '') {
-            $bindTypes .= 's';
-            $bindValues[] = $selected_school;
+            if ($subject_has_school) {
+                $bindTypes .= 's';
+                $bindValues[] = $selected_school;
+            }
+            if ($subject_has_department) {
+                $bindTypes .= 's';
+                $bindValues[] = $selected_school;
+            }
         }
         if ($bindTypes !== '') {
             $bindParams = [$stmt_c, $bindTypes];

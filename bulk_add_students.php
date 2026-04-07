@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
@@ -38,6 +38,7 @@ function ensure_class_timetable_column(mysqli $conn, string $column, string $def
 ensure_class_timetable_column($conn, 'timeline', "VARCHAR(50) DEFAULT NULL");
 ensure_class_timetable_column($conn, 'is_broadcast', 'TINYINT(1) NOT NULL DEFAULT 0');
 ensure_class_timetable_column($conn, 'broadcast_token', "VARCHAR(64) DEFAULT NULL");
+ensure_class_timetable_column($conn, 'section_id', 'INT(11) NULL DEFAULT NULL');
 
 function format_timetable_timeline_label(string $timeline): string
 {
@@ -84,13 +85,13 @@ function generate_active_semester_timeline_options(mysqli $conn): array
             $baseLabel = format_timetable_timeline_label($timelineKey);
         }
 
-        $options[$timelineKey] = $schoolName !== '' ? ($schoolName . ' • ' . $baseLabel) : $baseLabel;
+        $options[$timelineKey] = $schoolName !== '' ? ($schoolName . ' - ' . $baseLabel) : $baseLabel;
     }
 
     return $options;
 }
 
-function send_timetable_notifications(mysqli $conn, array $classIds, string $fileName, string $filePath, string $timelineLabel = ''): void
+function send_timetable_notifications(mysqli $conn, array $classIds, string $fileName, string $filePath, string $timelineLabel = '', int $sectionId = 0): void
 {
     $normalizedIds = [];
     foreach ($classIds as $id) {
@@ -151,11 +152,21 @@ function send_timetable_notifications(mysqli $conn, array $classIds, string $fil
         }
     }
 
-    $studentStmt = mysqli_prepare($conn, "SELECT id, class_id, name, college_email, sap_id FROM students WHERE class_id IN ($placeholders)");
+    $studentSql = "SELECT id, class_id, section_id, name, college_email, sap_id FROM students WHERE class_id IN ($placeholders)";
+    if ($sectionId > 0) {
+        $studentSql .= ' AND section_id = ?';
+    }
+    $studentStmt = mysqli_prepare($conn, $studentSql);
     if (!$studentStmt) {
         return;
     }
-    mysqli_stmt_bind_param($studentStmt, $types, ...array_keys($normalizedIds));
+    if ($sectionId > 0) {
+        $studentParams = array_values(array_keys($normalizedIds));
+        $studentParams[] = $sectionId;
+        mysqli_stmt_bind_param($studentStmt, $types . 'i', ...$studentParams);
+    } else {
+        mysqli_stmt_bind_param($studentStmt, $types, ...array_keys($normalizedIds));
+    }
     mysqli_stmt_execute($studentStmt);
     $studentResult = mysqli_stmt_get_result($studentStmt);
     $studentsByClass = [];
@@ -333,13 +344,29 @@ function handle_custom_section($conn, $class_id, $section_name)
     return $new_id ? (int)$new_id : null;
 }
 
-function upsert_student($conn, $sap_id, $full_name, $roll_number, $class_id, $section_id = null)
+function normalize_nmims_email(?string $email): ?string
+{
+    $email = strtolower(trim((string)$email));
+    if ($email === '') {
+        return null;
+    }
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return null;
+    }
+    if (!preg_match('/@(?:nmims\.in|nmims\.edu(?:\.in)?)$/i', $email)) {
+        return null;
+    }
+    return $email;
+}
+
+function upsert_student($conn, $sap_id, $full_name, $roll_number, $class_id, $section_id = null, $college_email = null, $bulkEmailOnlyForExisting = false, $requireEmailForNewJoin = false)
 {
     $sap_id = trim((string)$sap_id);
     $full_name = trim((string)$full_name);
     $roll_number = trim((string)$roll_number);
     $class_id = (int)$class_id;
     $section_id = $section_id !== null ? (int)$section_id : null;
+    $college_email = normalize_nmims_email($college_email);
 
     if ($sap_id === '' || $full_name === '' || $roll_number === '' || $class_id <= 0) {
         return 'error';
@@ -359,24 +386,48 @@ function upsert_student($conn, $sap_id, $full_name, $roll_number, $class_id, $se
 
     if ($found_current) {
         $student_id = (int)$existing_id;
-        $update_sql = "UPDATE students SET name = ?, roll_number = ?, section_id = NULLIF(?, 0) WHERE id = ?";
+        if ($bulkEmailOnlyForExisting) {
+            if ($college_email === null) {
+                return 'skipped_existing';
+            }
+
+            $email_update_sql = "UPDATE students SET college_email = ? WHERE id = ? AND (college_email IS NULL OR TRIM(college_email) = '')";
+            $email_update_stmt = mysqli_prepare($conn, $email_update_sql);
+            if (!$email_update_stmt) {
+                return 'error';
+            }
+            mysqli_stmt_bind_param($email_update_stmt, "si", $college_email, $student_id);
+            $ok = mysqli_stmt_execute($email_update_stmt);
+            $affected = mysqli_stmt_affected_rows($email_update_stmt);
+            mysqli_stmt_close($email_update_stmt);
+            if (!$ok) {
+                return 'error';
+            }
+            return $affected > 0 ? 'email_updated' : 'skipped_existing';
+        }
+
+        $update_sql = "UPDATE students SET name = ?, roll_number = ?, section_id = NULLIF(?, 0), college_email = COALESCE(?, college_email) WHERE id = ?";
         $update_stmt = mysqli_prepare($conn, $update_sql);
         if (!$update_stmt) {
             return 'error';
         }
-        mysqli_stmt_bind_param($update_stmt, "ssii", $full_name, $roll_number, $section_for_query, $student_id);
+        mysqli_stmt_bind_param($update_stmt, "ssisi", $full_name, $roll_number, $section_for_query, $college_email, $student_id);
         $ok = mysqli_stmt_execute($update_stmt);
         mysqli_stmt_close($update_stmt);
         return $ok ? 'updated' : 'error';
     }
 
-    $insert_sql = "INSERT INTO students (sap_id, name, roll_number, class_id, section_id) VALUES (?, ?, ?, ?, NULLIF(?, 0))";
+    if (($bulkEmailOnlyForExisting || $requireEmailForNewJoin) && $college_email === null) {
+        return 'missing_email_new';
+    }
+
+    $insert_sql = "INSERT INTO students (sap_id, name, roll_number, class_id, section_id, college_email) VALUES (?, ?, ?, ?, NULLIF(?, 0), ?)";
     $insert_stmt = mysqli_prepare($conn, $insert_sql);
     if (!$insert_stmt) {
         return 'error';
     }
 
-    mysqli_stmt_bind_param($insert_stmt, "sssii", $sap_id, $full_name, $roll_number, $class_id, $section_for_query);
+    mysqli_stmt_bind_param($insert_stmt, "sssiss", $sap_id, $full_name, $roll_number, $class_id, $section_for_query, $college_email);
     $ok = mysqli_stmt_execute($insert_stmt);
     mysqli_stmt_close($insert_stmt);
 
@@ -392,6 +443,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $full_name = trim($_POST['full_name'] ?? '');
         $sap_id = trim($_POST['sap_id'] ?? '');
         $roll_number = trim($_POST['roll_number'] ?? '');
+        $college_email_raw = trim((string)($_POST['college_email'] ?? ''));
         $class_id = isset($_POST['class_id']) ? (int)$_POST['class_id'] : 0;
         $section_mode = $_POST['section_mode'] ?? 'none';
         $section_raw = $_POST['section_id'] ?? '';
@@ -405,6 +457,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         if ($class_id <= 0 || !isset($class_meta_map[$class_id])) {
             respond_json_error('Please choose a valid class.');
+        }
+
+        $college_email_normalized = '';
+        if ($college_email_raw !== '') {
+            $normalized_email = normalize_nmims_email($college_email_raw);
+            if ($normalized_email === null) {
+                respond_json_error('College Email must be a valid NMIMS email.');
+            }
+            $college_email_normalized = $normalized_email;
         }
 
         $pending_section_id = null;
@@ -459,13 +520,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         $section_for_update = $pending_section_id ? $pending_section_id : 0;
 
-        $update_sql = "UPDATE students SET sap_id = ?, roll_number = ?, name = ?, class_id = ?, section_id = NULLIF(?, 0) WHERE id = ?";
+        $update_sql = "UPDATE students SET sap_id = ?, roll_number = ?, name = ?, class_id = ?, section_id = NULLIF(?, 0), college_email = NULLIF(?, '') WHERE id = ?";
         $update_stmt = mysqli_prepare($conn, $update_sql);
         if (!$update_stmt) {
             mysqli_rollback($conn);
             respond_json_error('Unable to prepare the student update.');
         }
-        mysqli_stmt_bind_param($update_stmt, "sssiii", $sap_id, $roll_number, $full_name, $class_id, $section_for_update, $student_id);
+        mysqli_stmt_bind_param($update_stmt, "sssiisi", $sap_id, $roll_number, $full_name, $class_id, $section_for_update, $college_email_normalized, $student_id);
         if (!mysqli_stmt_execute($update_stmt)) {
             mysqli_stmt_close($update_stmt);
             mysqli_rollback($conn);
@@ -485,7 +546,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             respond_json_error('Unable to complete the update.');
         }
 
-        $fetch_sql = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name\n                      FROM students st\n                      JOIN classes c ON st.class_id = c.id\n                      LEFT JOIN sections sec ON st.section_id = sec.id\n                      WHERE st.id = ?";
+        $fetch_sql = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name\n                      FROM students st\n                      JOIN classes c ON st.class_id = c.id\n                      LEFT JOIN sections sec ON st.section_id = sec.id\n                      WHERE st.id = ?";
         $fetch_stmt = mysqli_prepare($conn, $fetch_sql);
         if (!$fetch_stmt) {
             respond_json_error('Unable to load the updated student.');
@@ -1001,6 +1062,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_global_timetab
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_class_timetable'])) {
     $class_id = isset($_POST['class_id_timetable']) ? (int)$_POST['class_id_timetable'] : 0;
+    $section_id = isset($_POST['class_section_id_timetable']) ? (int)$_POST['class_section_id_timetable'] : 0;
 
     if ($class_id <= 0) {
         $error = $error ? $error . ' ' : '';
@@ -1023,20 +1085,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_class_timetable
                 $random_segment = uniqid();
             }
             $sanitized_extension = $extension !== '' ? '.' . preg_replace('/[^A-Za-z0-9]/', '', $extension) : '';
-            $new_filename = 'class_' . $class_id . '_' . date('YmdHis') . '_' . $random_segment . $sanitized_extension;
+            $new_filename = 'class_' . $class_id . '_sec_' . max(0, $section_id) . '_' . date('YmdHis') . '_' . $random_segment . $sanitized_extension;
             $target_path = $upload_dir . $new_filename;
             $relative_path = 'uploads/class_timetables/' . $new_filename;
 
             if (move_uploaded_file($_FILES['class_timetable_file']['tmp_name'], $target_path)) {
-                $insert_sql = "INSERT INTO class_timetables (class_id, file_name, file_path) VALUES (?, ?, ?)";
+                $insert_sql = "INSERT INTO class_timetables (class_id, section_id, file_name, file_path) VALUES (?, ?, ?, ?)";
                 $stmt_insert_tt = mysqli_prepare($conn, $insert_sql);
                 if ($stmt_insert_tt) {
-                    mysqli_stmt_bind_param($stmt_insert_tt, "iss", $class_id, $safe_display_name, $relative_path);
+                    $section_id_db = $section_id > 0 ? $section_id : 0;
+                    mysqli_stmt_bind_param($stmt_insert_tt, "iiss", $class_id, $section_id_db, $safe_display_name, $relative_path);
                     mysqli_stmt_execute($stmt_insert_tt);
                     mysqli_stmt_close($stmt_insert_tt);
                     $success = $success ? $success . ' ' : '';
                     $success .= 'Timetable uploaded successfully.';
-                    send_timetable_notifications($conn, [$class_id], $safe_display_name, $relative_path, 'Class Timetable');
+                    send_timetable_notifications($conn, [$class_id], $safe_display_name, $relative_path, 'Class Timetable', $section_id);
                 } else {
                     $error = $error ? $error . ' ' : '';
                     $error .= 'Could not record the timetable in the database.';
@@ -1122,13 +1185,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_single_student']))
     }
 
     if (!$error) {
-        $status = upsert_student($conn, $_POST['sap_id'] ?? '', $_POST['full_name'] ?? '', $_POST['roll_number'] ?? '', $class_id, $section_id);
+        $status = upsert_student($conn, $_POST['sap_id'] ?? '', $_POST['full_name'] ?? '', $_POST['roll_number'] ?? '', $class_id, $section_id, $_POST['college_email'] ?? null, false, true);
         if ($status === 'inserted') {
             $success = $success ? $success . ' ' : '';
             $success .= 'New student added successfully.';
         } elseif ($status === 'updated') {
             $success = $success ? $success . ' ' : '';
             $success .= 'Student updated/promoted successfully.';
+        } elseif ($status === 'missing_email_new') {
+            $error = $error ? $error . ' ' : '';
+            $error .= 'College Email is mandatory for new joining students and must be a valid NMIMS email.';
         } else {
             $error = $error ? $error . ' ' : '';
             $error .= 'Unable to save the student record.';
@@ -1175,6 +1241,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['excel_file'])) {
                         'sap' => ['sap id', 'sapid', 'sap id.', 'sap'],
                         'name' => ['name of the student', 'name of student', 'full name', 'name', 'student name']
                     ];
+                    $optional = [
+                        'college_email' => ['college email', 'college_email', 'nmims email', 'email', 'student email']
+                    ];
                     $friendlyLabels = [
                         'sno' => 'S/N',
                         'roll' => 'ROLL NO',
@@ -1203,23 +1272,87 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['excel_file'])) {
                         $error = $error ? $error . ' ' : '';
                         $error .= 'Invalid CSV format. Required columns missing: ' . implode(', ', $missing) . '. Please use the template.';
                     } else {
+                        foreach ($optional as $key => $variants) {
+                            foreach ($variants as $v) {
+                                $pos = array_search(strtolower($v), $normalizedHeader, true);
+                                if ($pos !== false) {
+                                    $columnMap[$key] = $pos;
+                                    break;
+                                }
+                            }
+                        }
+
                         $updated_count = 0;
                         $inserted_count = 0;
+                        $email_update_only_count = 0;
+                        $existing_skipped_count = 0;
+                        $invalid_email_count = 0;
+                        $invalid_email_details = [];
+                        $email_added_count = 0;
+                        $missing_email_for_new_count = 0;
+                        $missing_email_for_new_details = [];
                         while (($data = fgetcsv($handle, 1000, ',')) !== false) {
                             $sap_value = trim($data[$columnMap['sap']] ?? '');
                             $name_value = trim($data[$columnMap['name']] ?? '');
                             $roll_value = trim($data[$columnMap['roll']] ?? '');
+                            $college_email_value = '';
+                            $normalized_email = null;
+                            if (isset($columnMap['college_email'])) {
+                                $college_email_value = trim((string)($data[$columnMap['college_email']] ?? ''));
+                                $normalized_email = normalize_nmims_email($college_email_value);
+                                if ($college_email_value !== '' && $normalized_email === null) {
+                                    $invalid_email_count++;
+                                    $invalid_email_details[] = [
+                                        'sap_id' => $sap_value,
+                                        'name' => $name_value,
+                                        'email' => $college_email_value,
+                                    ];
+                                }
+                            }
                             if ($sap_value !== '' && $name_value !== '' && $roll_value !== '') {
-                                $status = upsert_student($conn, $sap_value, $name_value, $roll_value, $class_id, $section_id);
+                                $status = upsert_student($conn, $sap_value, $name_value, $roll_value, $class_id, $section_id, $college_email_value, true);
                                 if ($status === 'updated') {
                                     $updated_count++;
                                 } elseif ($status === 'inserted') {
                                     $inserted_count++;
+                                    if ($normalized_email !== null) {
+                                        $email_added_count++;
+                                    }
+                                } elseif ($status === 'email_updated') {
+                                    $email_update_only_count++;
+                                    $email_added_count++;
+                                } elseif ($status === 'skipped_existing') {
+                                    $existing_skipped_count++;
+                                } elseif ($status === 'missing_email_new') {
+                                    $missing_email_for_new_count++;
+                                    $missing_email_for_new_details[] = [
+                                        'sap_id' => $sap_value,
+                                        'name' => $name_value,
+                                    ];
                                 }
                             }
                         }
                         $success = $success ? $success . ' ' : '';
-                        $success .= 'Bulk operation complete: ' . $inserted_count . ' new students added, ' . $updated_count . ' existing students updated/promoted.';
+                        $success .= 'Bulk operation complete: ' . $inserted_count . ' new students added, ' . $email_update_only_count . ' existing students had missing NMIMS email filled, ' . $existing_skipped_count . ' existing students kept unchanged, ' . $email_added_count . ' NMIMS emails added.';
+                        if ($invalid_email_count > 0) {
+                            $error = $error ? $error . ' ' : '';
+                            $detailLines = [];
+                            foreach ($invalid_email_details as $entry) {
+                                $detailLines[] = 'SAP ID: ' . ($entry['sap_id'] !== '' ? $entry['sap_id'] : 'N/A')
+                                    . ', Name: ' . ($entry['name'] !== '' ? $entry['name'] : 'N/A')
+                                    . ', Email: ' . ($entry['email'] !== '' ? $entry['email'] : 'N/A');
+                            }
+                            $error .= $invalid_email_count . ' email value(s) were ignored because they are not valid NMIMS domains. Invalid entries: ' . implode(' | ', $detailLines);
+                        }
+                        if ($missing_email_for_new_count > 0) {
+                            $error = $error ? $error . ' ' : '';
+                            $detailLines = [];
+                            foreach ($missing_email_for_new_details as $entry) {
+                                $detailLines[] = 'SAP ID: ' . ($entry['sap_id'] !== '' ? $entry['sap_id'] : 'N/A')
+                                    . ', Name: ' . ($entry['name'] !== '' ? $entry['name'] : 'N/A');
+                            }
+                            $error .= $missing_email_for_new_count . ' new student row(s) were skipped because COLLEGE EMAIL is mandatory for new joining students. Missing email entries: ' . implode(' | ', $detailLines);
+                        }
                     }
                     fclose($handle);
                 } else {
@@ -1235,11 +1368,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['excel_file'])) {
 }
 
 $class_timetable_summary = [];
-$summary_sql = "SELECT ct.id, ct.class_id, ct.file_name, ct.file_path, ct.uploaded_at, ct.timeline, ct.is_broadcast\n                FROM class_timetables ct\n                INNER JOIN (\n                    SELECT class_id, MAX(id) AS latest_id\n                    FROM class_timetables\n                    GROUP BY class_id\n                ) latest ON latest.class_id = ct.class_id AND latest.latest_id = ct.id";
+$summary_sql = "SELECT ct.id, ct.class_id, COALESCE(ct.section_id, 0) AS section_key, ct.file_name, ct.file_path, ct.uploaded_at, ct.timeline, ct.is_broadcast\n                FROM class_timetables ct\n                INNER JOIN (\n                    SELECT class_id, COALESCE(section_id, 0) AS section_key, MAX(id) AS latest_id\n                    FROM class_timetables\n                    GROUP BY class_id, COALESCE(section_id, 0)\n                ) latest ON latest.class_id = ct.class_id\n                       AND latest.section_key = COALESCE(ct.section_id, 0)\n                       AND latest.latest_id = ct.id";
 $summary_result = mysqli_query($conn, $summary_sql);
 if ($summary_result) {
     while ($row = mysqli_fetch_assoc($summary_result)) {
-        $class_timetable_summary[(int)$row['class_id']] = $row;
+        $summaryKey = (int)$row['class_id'] . '|' . (int)($row['section_key'] ?? 0);
+        $class_timetable_summary[$summaryKey] = $row;
     }
     mysqli_free_result($summary_result);
 }
@@ -1258,9 +1392,10 @@ if ($broadcast_result) {
     mysqli_free_result($broadcast_result);
 }
 
-$classes_query = "SELECT c.id AS class_id, c.class_name, c.school, c.semester, s.id AS section_id, s.section_name,\n                         COUNT(st.id) AS student_count\n                  FROM classes c\n                  LEFT JOIN sections s ON s.class_id = c.id\n                  LEFT JOIN students st ON st.class_id = c.id AND (s.id IS NULL OR st.section_id = s.id)\n                  GROUP BY c.id, s.id\n                  ORDER BY c.semester, c.class_name, s.section_name";
+$classes_query = "SELECT c.id AS class_id, c.class_name, c.school, c.semester, c.academic_term_id,\n                         ac.semester_term, ac.academic_year,\n                         s.id AS section_id, s.section_name,\n                         COUNT(st.id) AS student_count\n                  FROM classes c\n                  LEFT JOIN academic_calendar ac ON ac.id = c.academic_term_id\n                  LEFT JOIN sections s ON s.class_id = c.id\n                  LEFT JOIN students st ON st.class_id = c.id AND (s.id IS NULL OR st.section_id = s.id)\n                  GROUP BY c.id, s.id\n                  ORDER BY c.semester, c.class_name, s.section_name";
 $classes_result_cards = mysqli_query($conn, $classes_query);
 $cards_by_semester = [];
+$existing_students_filters = [];
 if ($classes_result_cards) {
     while ($row = mysqli_fetch_assoc($classes_result_cards)) {
         $row['class_label'] = format_class_label(
@@ -1269,11 +1404,51 @@ if ($classes_result_cards) {
             $row['semester'] ?? '',
             $row['school'] ?? ''
         );
-        $sem = $row['semester'] ?: 'Unknown';
-        if (!isset($cards_by_semester[$sem])) {
-            $cards_by_semester[$sem] = [];
+
+        $semesterRaw = trim((string)($row['semester'] ?? ''));
+        $semesterDigits = preg_replace('/[^0-9]/', '', $semesterRaw);
+        $semesterNumber = $semesterDigits !== '' ? (int)$semesterDigits : 0;
+        $termTypeRaw = strtolower(trim((string)($row['semester_term'] ?? '')));
+        $parity = 'other';
+        if ($termTypeRaw === 'odd' || $termTypeRaw === 'even') {
+            $parity = $termTypeRaw;
+        } elseif ($semesterNumber > 0) {
+            $parity = ($semesterNumber % 2 === 0) ? 'even' : 'odd';
         }
-        $cards_by_semester[$sem][] = $row;
+
+        $termId = isset($row['academic_term_id']) ? (int)$row['academic_term_id'] : 0;
+        $timelineKey = $termId > 0 ? ('term_' . $termId) : ('semester_' . strtolower(preg_replace('/[^a-z0-9]+/i', '_', $semesterRaw !== '' ? $semesterRaw : 'unknown')));
+
+        $termLabelParts = [];
+        if ($parity === 'odd' || $parity === 'even') {
+            $termLabelParts[] = ucfirst($parity) . ' Term';
+        }
+        if ($semesterRaw !== '') {
+            $termLabelParts[] = 'Sem ' . $semesterRaw;
+        }
+        $academicYear = trim((string)($row['academic_year'] ?? ''));
+        if ($academicYear !== '') {
+            $termLabelParts[] = 'AY ' . $academicYear;
+        }
+        $timelineLabel = !empty($termLabelParts) ? implode(' - ', $termLabelParts) : ('Semester ' . ($semesterRaw !== '' ? $semesterRaw : 'Unknown'));
+
+        if (!isset($cards_by_semester[$timelineKey])) {
+            $cards_by_semester[$timelineKey] = [
+                'label' => $timelineLabel,
+                'parity' => $parity,
+                'rows' => []
+            ];
+        }
+
+        if (!isset($existing_students_filters[$timelineKey])) {
+            $existing_students_filters[$timelineKey] = [
+                'key' => $timelineKey,
+                'label' => $timelineLabel,
+                'parity' => $parity,
+            ];
+        }
+
+        $cards_by_semester[$timelineKey]['rows'][] = $row;
     }
     mysqli_free_result($classes_result_cards);
 }
@@ -1346,30 +1521,40 @@ foreach ($class_sections_map as $cid => $sections) {
         .bulk-actions .btn { padding: 8px 14px; }
         .card-body .form-group input[type=file] { display: block; width: 100%; }
         .timetable-upload {
-            margin-top: 12px;
+            margin-top: 8px;
             background-color: #f9f9f9;
             border: 1px solid #e0e0e0;
             border-radius: 8px;
-            padding: 10px 12px;
+            padding: 7px 9px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 4px;
         }
         .timetable-upload-form {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             flex-wrap: wrap;
+            background: transparent;
+            box-shadow: none;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            margin: 0;
         }
         .upload-timetable-btn {
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 6px;
-            padding: 6px 12px;
+            padding: 4px 9px;
             border-radius: 6px;
             background-color: #A6192E;
             color: #fff;
-            font-size: 0.9em;
+            font-size: 0.8em;
+            font-weight: 600;
+            min-height: 34px;
+            min-width: 132px;
             cursor: pointer;
             text-decoration: none;
             border: none;
@@ -1378,7 +1563,7 @@ foreach ($class_sections_map as $cid => $sections) {
             background-color: #8b1425;
         }
         .upload-timetable-meta {
-            font-size: 0.85em;
+            font-size: 0.8em;
             color: #555;
         }
         .term-filter-group {
@@ -1407,26 +1592,68 @@ foreach ($class_sections_map as $cid => $sections) {
             color: #A6192E;
             text-decoration: underline;
         }
+        .class-action-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-height: 34px;
+            min-width: 132px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.8em;
+            font-weight: 600;
+            line-height: 1;
+            text-decoration: none;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+        .class-action-btn--secondary {
+            background: #6c757d;
+            color: #fff;
+        }
+        .class-action-btn--secondary:hover {
+            background: #5d666f;
+            color: #fff;
+        }
+        .class-action-btn--ghost {
+            background: #fff;
+            color: #A6192E;
+            border-color: #A6192E;
+        }
+        .class-action-btn--ghost:hover {
+            background: rgba(166, 25, 46, 0.08);
+        }
         .timetable-edit {
             display: flex;
-            flex-direction: column;
-            align-items: flex-start;
+            flex-direction: row;
+            align-items: center;
             gap: 6px;
         }
         .timetable-edit-toggle {
-            background: none;
-            border: none;
+            background: #fff;
+            border: 1px solid #A6192E;
+            border-radius: 6px;
             color: #A6192E;
             font-weight: 600;
             cursor: pointer;
-            padding: 0;
-            font-size: 0.82em;
+            padding: 4px 10px;
+            font-size: 0.8em;
+            min-height: 34px;
+            min-width: 84px;
         }
         .timetable-edit-toggle:hover {
-            text-decoration: underline;
+            background: rgba(166, 25, 46, 0.08);
+            text-decoration: none;
         }
         .timetable-delete-form {
             display: none;
+            background: transparent;
+            box-shadow: none;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            margin: 0;
         }
         .timetable-delete-form.is-visible {
             display: block;
@@ -1569,30 +1796,31 @@ foreach ($class_sections_map as $cid => $sections) {
         .class-card-list {
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 8px;
         }
         .class-card {
             display: flex;
             flex-wrap: wrap;
-            gap: 18px;
-            padding: 18px 20px;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 12px;
             border: 1px solid #dadde3;
-            border-radius: 12px;
+            border-radius: 10px;
             background-color: #ffffff;
-            box-shadow: 0 10px 18px rgba(14, 32, 56, 0.08);
+            box-shadow: 0 6px 12px rgba(14, 32, 56, 0.07);
             cursor: pointer;
             transition: box-shadow 0.2s ease, transform 0.2s ease;
         }
         .class-card:hover {
-            box-shadow: 0 16px 24px rgba(14, 32, 56, 0.12);
-            transform: translateY(-2px);
+            box-shadow: 0 10px 18px rgba(14, 32, 56, 0.1);
+            transform: translateY(-1px);
         }
         .class-card-main {
             flex: 1 1 320px;
             min-width: 260px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 4px;
         }
         .class-card-header {
             display: flex;
@@ -1600,34 +1828,59 @@ foreach ($class_sections_map as $cid => $sections) {
             align-items: center;
             gap: 12px;
         }
+        .student-count-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
         .class-card-header strong {
-            font-size: 1.05em;
+            font-size: 0.92em;
             color: #0a2239;
         }
         .student-count-badge {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 4px 12px;
+            padding: 3px 10px;
             border-radius: 999px;
             background-color: #eef2f7;
             color: #345;
-            font-size: 0.85em;
+            font-size: 0.8em;
             font-weight: 600;
-            min-width: 110px;
+            min-width: 92px;
             text-align: center;
+        }
+        .student-count-hint {
+            font-size: 0.74em;
+            color: #6b7280;
+            white-space: nowrap;
         }
         .class-card-meta {
             color: #4a5568;
-            font-size: 0.92em;
+            font-size: 0.82em;
+            line-height: 1.3;
         }
         .class-card-side {
-            flex: 0 0 320px;
+            flex: 1 1 100%;
             max-width: 100%;
         }
         .class-card .timetable-upload {
-            height: 100%;
+            height: auto;
             background-color: #f6f8fb;
+            margin-top: 2px;
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .class-card .timetable-upload-form {
+            gap: 6px;
+        }
+        .class-card .upload-timetable-meta {
+            margin-left: auto;
+            text-align: right;
+            max-width: 55%;
         }
         .class-card .card-expand {
             flex-basis: 100%;
@@ -1644,6 +1897,15 @@ foreach ($class_sections_map as $cid => $sections) {
             }
             .class-card-side {
                 flex-basis: auto;
+            }
+            .class-card .timetable-upload {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .class-card .upload-timetable-meta {
+                margin-left: 0;
+                max-width: 100%;
+                text-align: left;
             }
         }
         .inline-status.success {
@@ -1665,9 +1927,9 @@ foreach ($class_sections_map as $cid => $sections) {
         }
         .student-count-badge {
             background: #f7f7f7;
-            padding: 6px 8px;
+            padding: 4px 8px;
             border-radius: 12px;
-            font-size: 0.9em;
+            font-size: 0.82em;
         }
     </style>
 </head>
@@ -1686,7 +1948,7 @@ foreach ($class_sections_map as $cid => $sections) {
             <a href="change_roles.php"><i class="fas fa-user-cog"></i> <span>Change Roles</span></a>
             <a href="bulk_add_students.php" class="active"><i class="fas fa-user-plus"></i> <span>Add Students</span></a>
             <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -1719,6 +1981,10 @@ foreach ($class_sections_map as $cid => $sections) {
                                 <div class="form-group">
                                     <label>What is the Roll Number? (e.g., CE-01)</label>
                                     <input type="text" name="roll_number" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>College Email (required for new joining students, NMIMS only)</label>
+                                    <input type="email" name="college_email" placeholder="student@nmims.in" required>
                                 </div>
                                 <div class="form-group">
                                     <label>Which School/Department does the student belong to?</label>
@@ -1810,7 +2076,7 @@ foreach ($class_sections_map as $cid => $sections) {
                                     <input type="file" name="excel_file" accept=".csv" required>
                                 </div>
                                 <div class="bulk-actions" style="display:flex;flex-direction:column;gap:10px;">
-                                    <p style="margin:0;"><b>NOTE:</b> Required columns (in any order): <strong>S/N</strong>, <strong>ROLL NO</strong>, <strong>SAP ID</strong>, <strong>NAME OF STUDENT</strong>. Use the provided template for correct headers.</p>
+                                    <p style="margin:0;"><b>NOTE:</b> Required columns (in any order): <strong>S/N</strong>, <strong>ROLL NO</strong>, <strong>SAP ID</strong>, <strong>NAME OF STUDENT</strong>. <strong>COLLEGE EMAIL</strong> (NMIMS domains only) is mandatory for new joining students and used to fill missing emails for existing students.</p>
                                     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;">
                                         <button type="submit" class="btn">Upload Students</button>
                                         <a href="download_template.php" class="btn" style="text-decoration: none; background-color: #6c757d;">Download Template</a>
@@ -2001,29 +2267,40 @@ foreach ($class_sections_map as $cid => $sections) {
                             <p>No classes found. Create classes first.</p>
                         <?php else: ?>
                             <div class="term-filter-group" id="existing_students_filters">
-                                <button type="button" class="term-filter-button" data-filter="odd">Odd Term</button>
-                                <button type="button" class="term-filter-button" data-filter="even">Even Term</button>
+                                <?php foreach ($existing_students_filters as $filter): ?>
+                                    <button type="button" class="term-filter-button" data-filter="<?php echo htmlspecialchars($filter['key']); ?>"><?php echo htmlspecialchars($filter['label']); ?></button>
+                                <?php endforeach; ?>
                             </div>
-                            <?php foreach ($cards_by_semester as $semester => $rows): ?>
-                                <?php
-                                    $semesterDigits = preg_replace('/[^0-9]/', '', (string)$semester);
-                                    $semesterNumber = $semesterDigits !== '' ? (int)$semesterDigits : 0;
-                                    $semesterParity = $semesterNumber > 0 ? (($semesterNumber % 2 === 0) ? 'even' : 'odd') : 'other';
-                                ?>
-                                <div class="semester-group" data-semester-group data-parity="<?php echo htmlspecialchars($semesterParity); ?>">
-                                    <h3 style="margin-top:12px;"><?php echo htmlspecialchars('Year/Semester: ' . $semester); ?></h3>
+                            <?php foreach ($cards_by_semester as $timelineKey => $timelineGroup): ?>
+                                <div class="semester-group" data-semester-group data-filter-key="<?php echo htmlspecialchars($timelineKey); ?>" style="display:none;">
+                                    <h3 style="margin-top:12px;"><?php echo htmlspecialchars($timelineGroup['label']); ?></h3>
                                     <div class="class-card-list">
-                                        <?php foreach ($rows as $card): ?>
-                                        <?php $latest_timetable = $class_timetable_summary[(int)$card['class_id']] ?? null; ?>
+                                        <?php foreach ($timelineGroup['rows'] as $card): ?>
+                                        <?php
+                                            $cardClassId = (int)$card['class_id'];
+                                            $cardSectionId = (int)($card['section_id'] ?? 0);
+                                            $summaryKeyExact = $cardClassId . '|' . $cardSectionId;
+                                            $summaryKeyClass = $cardClassId . '|0';
+                                            $latest_timetable = $class_timetable_summary[$summaryKeyExact] ?? null;
+                                            if (!$latest_timetable && isset($class_timetable_summary[$summaryKeyClass])) {
+                                                $candidate = $class_timetable_summary[$summaryKeyClass];
+                                                if (!empty($candidate['is_broadcast'])) {
+                                                    $latest_timetable = $candidate;
+                                                }
+                                            }
+                                        ?>
                                         <div class="class-card" data-class-id="<?php echo (int)$card['class_id']; ?>" data-section-id="<?php echo (int)($card['section_id'] ?? 0); ?>">
                                             <div class="class-card-main">
                                                 <div class="class-card-header">
                                                     <strong><?php echo htmlspecialchars($card['class_label'] ?: $card['class_name']); ?></strong>
-                                                    <span class="student-count-badge" data-student-count="<?php echo (int)$card['student_count']; ?>"><?php echo (int)$card['student_count']; ?> students</span>
+                                                    <div class="student-count-wrap">
+                                                        <span class="student-count-badge" data-student-count="<?php echo (int)$card['student_count']; ?>"><?php echo (int)$card['student_count']; ?> students</span>
+                                                        <span class="student-count-hint">Tap here to open/close student list</span>
+                                                    </div>
                                                 </div>
                                                 <div class="class-card-meta">
                                                     <div>Division: <?php echo htmlspecialchars($card['section_name'] ?: 'N/A'); ?></div>
-                                                    <div>School: <?php echo htmlspecialchars($card['school'] ?: 'N/A'); ?> • Semester: <?php echo htmlspecialchars($card['semester'] ?: 'N/A'); ?></div>
+                                                    <div>School: <?php echo htmlspecialchars($card['school'] ?: 'N/A'); ?> - Semester: <?php echo htmlspecialchars($card['semester'] ?: 'N/A'); ?></div>
                                                 </div>
                                             </div>
                                             <div class="class-card-side">
@@ -2031,10 +2308,12 @@ foreach ($class_sections_map as $cid => $sections) {
                                                     <form class="timetable-upload-form" method="POST" enctype="multipart/form-data">
                                                         <input type="hidden" name="upload_class_timetable" value="1">
                                                         <input type="hidden" name="class_id_timetable" value="<?php echo (int)$card['class_id']; ?>">
+                                                        <input type="hidden" name="class_section_id_timetable" value="<?php echo (int)($card['section_id'] ?? 0); ?>">
                                                         <input type="file" name="class_timetable_file" id="class-timetable-file-<?php echo (int)$card['class_id']; ?>" class="sr-only-file" accept="*/*" onchange="this.form.submit()">
                                                         <label for="class-timetable-file-<?php echo (int)$card['class_id']; ?>" class="upload-timetable-btn"><i class="fas fa-upload"></i>Upload timetable</label>
+                                                        <a href="download_class_students_template.php?class_id=<?php echo (int)$card['class_id']; ?>&section_id=<?php echo (int)($card['section_id'] ?? 0); ?>" class="class-action-btn class-action-btn--secondary"><i class="fas fa-download"></i>Download class CSV</a>
                                                         <?php if ($latest_timetable): ?>
-                                                            <a href="<?php echo htmlspecialchars($latest_timetable['file_path']); ?>" target="_blank" rel="noopener" class="timetable-download-link">View latest</a>
+                                                            <a href="<?php echo htmlspecialchars($latest_timetable['file_path']); ?>" target="_blank" rel="noopener" class="class-action-btn class-action-btn--ghost">View latest</a>
                                                         <?php endif; ?>
                                                     </form>
                                                     <?php if ($latest_timetable): ?>
@@ -2062,7 +2341,7 @@ foreach ($class_sections_map as $cid => $sections) {
                                                         <div class="upload-timetable-meta">
                                                             Last upload: <?php echo htmlspecialchars($lastUploadLabel); ?>
                                                             <?php if (!empty($metaParts)): ?>
-                                                                <br><small><?php echo htmlspecialchars(implode(' • ', $metaParts)); ?></small>
+                                                                <br><small><?php echo htmlspecialchars(implode(' - ', $metaParts)); ?></small>
                                                             <?php endif; ?>
                                                         </div>
                                                     <?php else: ?>
@@ -2551,6 +2830,10 @@ foreach ($class_sections_map as $cid => $sections) {
                 nameCell.textContent = student.name ? student.name : '';
                 row.appendChild(nameCell);
 
+                const emailCell = document.createElement('td');
+                emailCell.textContent = student.college_email ? student.college_email : 'N/A';
+                row.appendChild(emailCell);
+
                 const classCell = document.createElement('td');
                 classCell.textContent = student.class_name ? student.class_name : '';
                 row.appendChild(classCell);
@@ -2613,9 +2896,10 @@ foreach ($class_sections_map as $cid => $sections) {
                 const rollCell = cells[1];
                 const sapCell = cells[2];
                 const nameCell = cells[3];
-                const classCell = cells[4];
-                const sectionCell = cells[5];
-                const actionsCell = cells[6];
+                const emailCell = cells[4];
+                const classCell = cells[5];
+                const sectionCell = cells[6];
+                const actionsCell = cells[7];
 
                 rollCell.innerHTML = '';
                 const rollInput = document.createElement('input');
@@ -2637,6 +2921,14 @@ foreach ($class_sections_map as $cid => $sections) {
                 nameInput.value = student.name || '';
                 nameInput.className = 'inline-edit-input';
                 nameCell.appendChild(nameInput);
+
+                emailCell.innerHTML = '';
+                const emailInput = document.createElement('input');
+                emailInput.type = 'email';
+                emailInput.value = student.college_email || '';
+                emailInput.className = 'inline-edit-input';
+                emailInput.placeholder = 'student@nmims.in';
+                emailCell.appendChild(emailInput);
 
                 classCell.innerHTML = '';
                 const classSelect = document.createElement('select');
@@ -2709,6 +3001,7 @@ foreach ($class_sections_map as $cid => $sections) {
                     rollInput,
                     sapInput,
                     nameInput,
+                    emailInput,
                     classSelect,
                     sectionSelect,
                     customInput,
@@ -2730,6 +3023,7 @@ foreach ($class_sections_map as $cid => $sections) {
                 const rollValue = controls.rollInput ? controls.rollInput.value.trim() : '';
                 const sapValue = controls.sapInput ? controls.sapInput.value.trim() : '';
                 const nameValue = controls.nameInput ? controls.nameInput.value.trim() : '';
+                const emailValue = controls.emailInput ? controls.emailInput.value.trim() : '';
                 const classValue = controls.classSelect ? toInt(controls.classSelect.value) : 0;
                 const sectionSelectValue = controls.sectionSelect ? controls.sectionSelect.value : '';
                 const customName = controls.customInput ? controls.customInput.value.trim() : '';
@@ -2740,6 +3034,10 @@ foreach ($class_sections_map as $cid => $sections) {
                 }
                 if (!classValue) {
                     showInlineStatus(row, 'Please select a class.', true);
+                    return;
+                }
+                if (emailValue && !/@(?:nmims\.in|nmims\.edu(?:\.in)?)$/i.test(emailValue)) {
+                    showInlineStatus(row, 'College Email must be a valid NMIMS email.', true);
                     return;
                 }
 
@@ -2762,6 +3060,7 @@ foreach ($class_sections_map as $cid => $sections) {
                 formData.append('full_name', nameValue);
                 formData.append('sap_id', sapValue);
                 formData.append('roll_number', rollValue);
+                formData.append('college_email', emailValue);
                 formData.append('class_id', classValue);
                 formData.append('section_mode', sectionMode);
                 if (sectionMode === 'existing') {
@@ -2906,7 +3205,7 @@ foreach ($class_sections_map as $cid => $sections) {
 
                                 const table = document.createElement('table');
                                 table.className = 'inline-student-table';
-                                table.innerHTML = '<thead><tr><th>#</th><th>Roll No</th><th>SAP ID</th><th>Name</th><th>Class</th><th>Division</th><th>Actions</th></tr></thead>';
+                                table.innerHTML = '<thead><tr><th>#</th><th>Roll No</th><th>SAP ID</th><th>Name</th><th>College Email</th><th>Class</th><th>Division</th><th>Actions</th></tr></thead>';
                                 const tbody = document.createElement('tbody');
                                 students.forEach((student, idx) => {
                                     const row = document.createElement('tr');
@@ -2953,8 +3252,8 @@ foreach ($class_sections_map as $cid => $sections) {
                                 });
                             }
                             semesterGroups.forEach(function (group) {
-                                const parity = group.getAttribute('data-parity');
-                                group.style.display = !activeFilter || parity === activeFilter ? '' : 'none';
+                                const filterKey = group.getAttribute('data-filter-key') || '';
+                                group.style.display = !activeFilter || filterKey === activeFilter ? '' : 'none';
                             });
                         });
                     });
@@ -2989,4 +3288,6 @@ foreach ($class_sections_map as $cid => $sections) {
     </script>
 </body>
 </html>
+
+
 

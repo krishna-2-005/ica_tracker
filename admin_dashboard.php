@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin') {
@@ -32,14 +32,14 @@ $academicContext = resolveAcademicContext($conn, [
         .dashboard-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            padding: 20px;
+            gap: 14px;
+            padding: 14px;
         }
 
         .dashboard-card {
             background-color: #ffffff;
             border-radius: 12px;
-            padding: 25px;
+            padding: 18px;
             text-align: center;
             text-decoration: none;
             color: #333;
@@ -57,14 +57,14 @@ $academicContext = resolveAcademicContext($conn, [
         }
 
         .dashboard-card i {
-            font-size: 2.5rem;
+            font-size: 2.2rem;
             color: #A6192E; /* Main theme color */
-            margin-bottom: 15px;
+            margin-bottom: 10px;
             background-color: rgba(166, 25, 46, 0.1);
             border-radius: 50%;
-            width: 70px;
-            height: 70px;
-            line-height: 70px;
+            width: 62px;
+            height: 62px;
+            line-height: 62px;
             transition: background-color 0.3s ease;
         }
         
@@ -73,7 +73,7 @@ $academicContext = resolveAcademicContext($conn, [
         }
 
         .dashboard-card span {
-            font-size: 1.1rem;
+            font-size: 1rem;
             font-weight: 600;
             display: block;
         }
@@ -100,7 +100,7 @@ $academicContext = resolveAcademicContext($conn, [
             <a href="change_roles.php"><i class="fas fa-user-cog"></i> <span>Change Roles</span></a>
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
             <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -145,12 +145,12 @@ $academicContext = resolveAcademicContext($conn, [
                     </a>
                     <a href="test_mail.php" class="dashboard-card">
                         <i class="fas fa-envelope-open-text"></i>
-                        <span>Test Mail</span>
+                        <span>Manual Mailing</span>
                     </a>
                 </div>
             </div>
             <div class="footer-bottom">
-                &copy; <?php echo date("Y"); ?> Kuchuru Sai Krishna Reddy – STME. All rights reserved.
+                &copy; <?php echo date("Y"); ?> Kuchuru Sai Krishna Reddy - STME. All rights reserved.
             </div>
         </div>
     </div>
@@ -163,3 +163,4 @@ $academicContext = resolveAcademicContext($conn, [
     </script>
 </body>
 </html>
+

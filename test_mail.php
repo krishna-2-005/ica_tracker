@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/email_notifications.php';
@@ -15,7 +15,9 @@ $error = '';
 $success = '';
 $selectedScenario = 'subject_assignment';
 $recipientEmail = '';
-$recipientName = '';
+$targetAudience = 'single';
+$targetClassIds = [];
+$otherReasonText = '';
 
 $scenarioOptions = [
     EMAIL_SCENARIO_SUBJECT_ASSIGNMENT => 'Subject Assignment to Faculty',
@@ -24,6 +26,7 @@ $scenarioOptions = [
     EMAIL_SCENARIO_ICA_MARKS_PUBLISHED => 'ICA Marks Published',
     EMAIL_SCENARIO_TIMETABLE_PUBLISHED => 'Timetable Published',
     EMAIL_SCENARIO_PASSWORD_RESET => 'Password Reset',
+    'other_reason' => 'Other Reason',
 ];
 
 function create_test_password_reset_token(mysqli $conn, int $userId): array
@@ -58,7 +61,7 @@ function create_test_password_reset_token(mysqli $conn, int $userId): array
     ];
 }
 
-function build_test_email_payload(mysqli $conn, string $scenario, string $recipientName, int $actorUserId): array
+function build_test_email_payload(mysqli $conn, string $scenario, string $recipientName, int $actorUserId, string $otherReasonText = ''): array
 {
     $baseUrl = email_notification_app_url();
     $displayName = trim($recipientName) !== '' ? trim($recipientName) : 'Test User';
@@ -129,45 +132,241 @@ function build_test_email_payload(mysqli $conn, string $scenario, string $recipi
                 'link_expires_at' => $resetData['link_expires_at'],
             ];
 
+        case 'other_reason':
+            return [
+                'recipient_name' => $displayName,
+                'alert_title' => 'Important Update from ICA Tracker',
+                'alert_message' => $otherReasonText,
+                'sender_name' => 'ICA Tracker Admin',
+                'sender_type' => 'Admin',
+                'alerts_url' => $baseUrl . '/index.php',
+            ];
+
         default:
             throw new InvalidArgumentException('Unsupported test email scenario.');
     }
 }
 
+function fetch_mail_targets(mysqli $conn, string $audience, array $classIds = []): array
+{
+    $targets = [];
+
+    if ($audience === 'faculty' || $audience === 'program_chair' || $audience === 'everyone') {
+        $roleSql = "SELECT role, name, email FROM users WHERE role IN ('teacher', 'program_chair') AND email IS NOT NULL AND email <> ''";
+        $roleRes = mysqli_query($conn, $roleSql);
+        if ($roleRes) {
+            while ($row = mysqli_fetch_assoc($roleRes)) {
+                $email = strtolower(trim((string)($row['email'] ?? '')));
+                if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    continue;
+                }
+                $role = trim((string)($row['role'] ?? ''));
+                if ($audience === 'faculty' && $role !== 'teacher') {
+                    continue;
+                }
+                if ($audience === 'program_chair' && $role !== 'program_chair') {
+                    continue;
+                }
+                if (!isset($targets[$email])) {
+                    $targets[$email] = trim((string)($row['name'] ?? ''));
+                }
+            }
+            mysqli_free_result($roleRes);
+        }
+    }
+
+    if ($audience === 'classes' || $audience === 'everyone') {
+        $studentSql = "SELECT name, college_email FROM students WHERE college_email IS NOT NULL AND college_email <> ''";
+        $types = '';
+        $params = [];
+        if ($audience === 'classes') {
+            $normalizedIds = [];
+            foreach ($classIds as $classId) {
+                $id = (int)$classId;
+                if ($id > 0) {
+                    $normalizedIds[$id] = $id;
+                }
+            }
+            if (empty($normalizedIds)) {
+                return [];
+            }
+            $placeholders = implode(',', array_fill(0, count($normalizedIds), '?'));
+            $studentSql .= ' AND class_id IN (' . $placeholders . ')';
+            $types = str_repeat('i', count($normalizedIds));
+            $params = array_values($normalizedIds);
+        }
+
+        $studentStmt = mysqli_prepare($conn, $studentSql);
+        if ($studentStmt) {
+            if ($types !== '') {
+                mysqli_stmt_bind_param($studentStmt, $types, ...$params);
+            }
+            mysqli_stmt_execute($studentStmt);
+            $studentRes = mysqli_stmt_get_result($studentStmt);
+            if ($studentRes) {
+                while ($row = mysqli_fetch_assoc($studentRes)) {
+                    $email = strtolower(trim((string)($row['college_email'] ?? '')));
+                    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        continue;
+                    }
+                    if (!isset($targets[$email])) {
+                        $targets[$email] = trim((string)($row['name'] ?? ''));
+                    }
+                }
+                mysqli_free_result($studentRes);
+            }
+            mysqli_stmt_close($studentStmt);
+        }
+    }
+
+    $recipientList = [];
+    foreach ($targets as $email => $name) {
+        $recipientList[] = [
+            'email' => $email,
+            'name' => $name
+        ];
+    }
+    return $recipientList;
+}
+
+$classOptions = [];
+$classOptionsRes = mysqli_query($conn, 'SELECT id, class_name, semester, school FROM classes ORDER BY school, semester, class_name');
+if ($classOptionsRes) {
+    while ($row = mysqli_fetch_assoc($classOptionsRes)) {
+        $classOptions[] = [
+            'id' => (int)($row['id'] ?? 0),
+            'label' => format_class_label(
+                $row['class_name'] ?? '',
+                '',
+                $row['semester'] ?? '',
+                $row['school'] ?? ''
+            )
+        ];
+    }
+    mysqli_free_result($classOptionsRes);
+}
+
+$classAudienceCounts = [];
+$classAudienceRows = mysqli_query($conn, "SELECT class_id, college_email FROM students WHERE class_id IS NOT NULL AND class_id > 0 AND college_email IS NOT NULL AND college_email <> ''");
+if ($classAudienceRows) {
+    while ($row = mysqli_fetch_assoc($classAudienceRows)) {
+        $classId = (int)($row['class_id'] ?? 0);
+        $email = strtolower(trim((string)($row['college_email'] ?? '')));
+        if ($classId <= 0 || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            continue;
+        }
+        if (!isset($classAudienceCounts[$classId])) {
+            $classAudienceCounts[$classId] = 0;
+        }
+        $classAudienceCounts[$classId]++;
+    }
+    mysqli_free_result($classAudienceRows);
+}
+
+$audiencePreviewCounts = [
+    'single' => 1,
+    'classes' => 0,
+    'faculty' => count(fetch_mail_targets($conn, 'faculty', [])),
+    'program_chair' => count(fetch_mail_targets($conn, 'program_chair', [])),
+    'everyone' => count(fetch_mail_targets($conn, 'everyone', [])),
+];
+foreach ($targetClassIds as $classId) {
+    $audiencePreviewCounts['classes'] += (int)($classAudienceCounts[(int)$classId] ?? 0);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_test_mail'])) {
     $selectedScenario = trim((string)($_POST['scenario'] ?? $selectedScenario));
     $recipientEmail = trim((string)($_POST['recipient_email'] ?? ''));
-    $recipientName = trim((string)($_POST['recipient_name'] ?? ''));
+    $targetAudience = trim((string)($_POST['target_audience'] ?? $targetAudience));
+    $rawTargetClassIds = $_POST['target_class_ids'] ?? [];
+    $otherReasonText = trim((string)($_POST['other_reason_text'] ?? ''));
+    if (!is_array($rawTargetClassIds)) {
+        $rawTargetClassIds = [];
+    }
+    $targetClassIds = [];
+    foreach ($rawTargetClassIds as $classId) {
+        $id = (int)$classId;
+        if ($id > 0) {
+            $targetClassIds[$id] = $id;
+        }
+    }
+    $targetClassIds = array_values($targetClassIds);
+
+    $validAudiences = ['single', 'classes', 'faculty', 'program_chair', 'everyone'];
 
     if (!isset($scenarioOptions[$selectedScenario])) {
         $error = 'Please choose a valid email scenario.';
-    } elseif ($recipientEmail === '' || !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL)) {
+    } elseif (!in_array($targetAudience, $validAudiences, true)) {
+        $error = 'Please choose a valid target audience.';
+    } elseif ($targetAudience === 'single' && ($recipientEmail === '' || !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL))) {
         $error = 'Please enter a valid recipient email address.';
+    } elseif ($targetAudience === 'classes' && empty($targetClassIds)) {
+        $error = 'Please select at least one class for class-wise mailing.';
+    } elseif ($selectedScenario === 'other_reason' && $otherReasonText === '') {
+        $error = 'Please type the other reason message before sending.';
     } else {
+        if ($targetAudience === 'classes') {
+            $audiencePreviewCounts['classes'] = 0;
+            foreach ($targetClassIds as $classId) {
+                $audiencePreviewCounts['classes'] += (int)($classAudienceCounts[(int)$classId] ?? 0);
+            }
+        }
         try {
-            $payload = build_test_email_payload($conn, $selectedScenario, $recipientName, (int)$_SESSION['user_id']);
-            $sent = send_notification_email($recipientEmail, $selectedScenario, $payload);
+            $sentCount = 0;
+            $failedCount = 0;
+            $effectiveScenario = $selectedScenario === 'other_reason' ? EMAIL_SCENARIO_PROGRAM_ALERT : $selectedScenario;
 
-            if ($sent) {
-                $success = 'Test email sent successfully to ' . $recipientEmail . '.';
+            if ($targetAudience === 'single') {
+                $payload = build_test_email_payload($conn, $selectedScenario, 'ICA Tracker Member', (int)$_SESSION['user_id'], $otherReasonText);
+                $sent = send_notification_email($recipientEmail, $effectiveScenario, $payload);
+                if ($sent) {
+                    $sentCount = 1;
+                } else {
+                    $failedCount = 1;
+                }
+            } else {
+                $targets = fetch_mail_targets($conn, $targetAudience, $targetClassIds);
+                if (empty($targets)) {
+                    $error = 'No recipients found for the selected audience.';
+                } else {
+                    foreach ($targets as $target) {
+                        $targetMail = trim((string)($target['email'] ?? ''));
+                        if ($targetMail === '') {
+                            continue;
+                        }
+                        $targetName = trim((string)($target['name'] ?? ''));
+                        $payload = build_test_email_payload($conn, $selectedScenario, $targetName, (int)$_SESSION['user_id'], $otherReasonText);
+                        if (send_notification_email($targetMail, $effectiveScenario, $payload)) {
+                            $sentCount++;
+                        } else {
+                            $failedCount++;
+                        }
+                    }
+                }
+            }
+
+            if ($error === '') {
+                $success = 'Mailing completed. Sent: ' . $sentCount . ', Failed: ' . $failedCount . '.';
                 log_activity($conn, [
                     'actor_id' => (int)$_SESSION['user_id'],
                     'event_type' => 'test_email_sent',
-                    'event_label' => 'Test email sent',
-                    'description' => 'Admin sent a test email for notification preview.',
+                    'event_label' => 'Manual mailing sent',
+                    'description' => 'Admin sent notification email(s) from Test Mail page.',
                     'object_type' => 'email_notification',
                     'object_id' => $selectedScenario,
                     'object_label' => $scenarioOptions[$selectedScenario],
                     'metadata' => [
                         'recipient_email' => $recipientEmail,
-                        'recipient_name' => $recipientName,
+                        'target_audience' => $targetAudience,
+                        'target_class_ids' => $targetClassIds,
+                        'sent_count' => $sentCount,
+                        'failed_count' => $failedCount,
                         'scenario' => $selectedScenario,
+                        'other_reason_text' => $otherReasonText,
                     ],
                     'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
                     'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
                 ]);
-            } else {
-                $error = 'Mail could not be sent. Check SMTP settings and storage/logs/app.log for details.';
             }
         } catch (Throwable $exception) {
             $error = 'Mail could not be sent: ' . $exception->getMessage();
@@ -187,9 +386,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_test_mail'])) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
         .test-mail-grid {
-            display: grid;
-            grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-            gap: 20px;
+            display: block;
         }
         .helper-list {
             margin: 0;
@@ -253,7 +450,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_test_mail'])) {
         <div class="main-content">
             <div class="header">
                 <h2>Welcome, <?php echo htmlspecialchars($adminNameDisplay); ?>!</h2>
-                <p>Send a sample notification through the same template and SMTP pipeline used by the app.</p>
             </div>
             <div class="container">
                 <div class="test-mail-grid">
@@ -271,14 +467,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_test_mail'])) {
 
                             <form method="POST">
                                 <div class="form-group">
-                                    <label for="recipient_email">Recipient Email</label>
-                                    <input type="email" id="recipient_email" name="recipient_email" value="<?php echo htmlspecialchars($recipientEmail); ?>" required>
+                                    <label for="target_audience">Target Audience</label>
+                                    <select id="target_audience" name="target_audience" required>
+                                        <option value="single" <?php echo $targetAudience === 'single' ? 'selected' : ''; ?>>Single Email</option>
+                                        <option value="classes" <?php echo $targetAudience === 'classes' ? 'selected' : ''; ?>>Classes (Students)</option>
+                                        <option value="faculty" <?php echo $targetAudience === 'faculty' ? 'selected' : ''; ?>>Faculty</option>
+                                        <option value="program_chair" <?php echo $targetAudience === 'program_chair' ? 'selected' : ''; ?>>Program Chair</option>
+                                        <option value="everyone" <?php echo $targetAudience === 'everyone' ? 'selected' : ''; ?>>Everyone</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group" id="target_class_group" style="display:none;">
+                                    <label for="target_class_ids">Target Classes</label>
+                                    <select id="target_class_ids" name="target_class_ids[]" multiple size="6">
+                                        <?php foreach ($classOptions as $classOption): ?>
+                                            <option value="<?php echo (int)$classOption['id']; ?>" <?php echo in_array((int)$classOption['id'], $targetClassIds, true) ? 'selected' : ''; ?>><?php echo htmlspecialchars($classOption['label']); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <div class="inline-note">Hold Ctrl (or Cmd on Mac) to select multiple classes.</div>
                                 </div>
 
                                 <div class="form-group">
-                                    <label for="recipient_name">Recipient Name</label>
-                                    <input type="text" id="recipient_name" name="recipient_name" value="<?php echo htmlspecialchars($recipientName); ?>" placeholder="Optional display name">
-                                    <div class="inline-note">If left empty, the email will use Test User as the display name.</div>
+                                    <label>Recipient Preview</label>
+                                    <div class="inline-note" id="recipient_preview_text">Estimated recipients: 1</div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="recipient_email">Recipient Email</label>
+                                    <input type="email" id="recipient_email" name="recipient_email" value="<?php echo htmlspecialchars($recipientEmail); ?>" required>
                                 </div>
 
                                 <div class="form-group">
@@ -290,29 +506,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_test_mail'])) {
                                     </select>
                                 </div>
 
+                                <div class="form-group" id="other_reason_group" style="display:none;">
+                                    <label for="other_reason_text">Other Reason Message</label>
+                                    <textarea id="other_reason_text" name="other_reason_text" rows="4" placeholder="Type the reason/message to send to selected audience..."><?php echo htmlspecialchars($otherReasonText); ?></textarea>
+                                </div>
+
                                 <button type="submit" name="send_test_mail" class="btn">Send Test Mail</button>
                             </form>
                         </div>
                     </div>
 
-                    <div class="card helper-card">
-                        <div class="card-header">
-                            <h5>What This Sends</h5>
-                        </div>
-                        <div class="card-body">
-                            <p>This page does not create real assignments, alerts, marks, or timetable broadcasts. It only sends a sample email using the live mail configuration.</p>
-                            <ul class="helper-list">
-                                <li>Uses the shared template from emailtemplate.html</li>
-                                <li>Uses the same SMTP account configured in .env</li>
-                                <li>Lets you test the NMIMS logo and layout in Gmail</li>
-                                <li>Helps isolate mail problems without changing real data</li>
-                            </ul>
-                            <p class="inline-note">If sending fails, review storage/logs/app.log for the SMTP error.</p>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
     </div>
+    <script>
+        (function () {
+            const audience = document.getElementById('target_audience');
+            const classGroup = document.getElementById('target_class_group');
+            const classSelect = document.getElementById('target_class_ids');
+            const recipientEmail = document.getElementById('recipient_email');
+            const scenarioSelect = document.getElementById('scenario');
+            const otherReasonGroup = document.getElementById('other_reason_group');
+            const otherReasonText = document.getElementById('other_reason_text');
+            const previewText = document.getElementById('recipient_preview_text');
+            const audiencePreviewCounts = <?php echo json_encode($audiencePreviewCounts, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+            const classAudienceCounts = <?php echo json_encode($classAudienceCounts, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+
+            function updateRecipientPreview() {
+                if (!previewText || !audience) {
+                    return;
+                }
+                const value = audience.value || 'single';
+                let count = 0;
+                if (value === 'single') {
+                    count = 1;
+                } else if (value === 'classes') {
+                    if (classSelect && classSelect.options) {
+                        for (let i = 0; i < classSelect.options.length; i++) {
+                            const option = classSelect.options[i];
+                            if (option.selected) {
+                                const classId = String(option.value || '');
+                                count += Number(classAudienceCounts[classId] || 0);
+                            }
+                        }
+                    }
+                } else {
+                    count = Number(audiencePreviewCounts[value] || 0);
+                }
+                previewText.textContent = 'Estimated recipients: ' + count;
+            }
+
+            function updateScenarioFields() {
+                const isOtherReason = scenarioSelect && scenarioSelect.value === 'other_reason';
+                if (otherReasonGroup) {
+                    otherReasonGroup.style.display = isOtherReason ? 'block' : 'none';
+                }
+                if (otherReasonText) {
+                    otherReasonText.required = !!isOtherReason;
+                }
+            }
+
+            function updateAudienceFields() {
+                const value = audience ? audience.value : 'single';
+                const isSingle = value === 'single';
+                const isClass = value === 'classes';
+
+                if (classGroup) {
+                    classGroup.style.display = isClass ? 'block' : 'none';
+                }
+                if (classSelect) {
+                    classSelect.required = isClass;
+                }
+                if (recipientEmail) {
+                    recipientEmail.required = isSingle;
+                    recipientEmail.disabled = !isSingle;
+                }
+                updateRecipientPreview();
+            }
+
+            if (audience) {
+                audience.addEventListener('change', updateAudienceFields);
+            }
+            if (classSelect) {
+                classSelect.addEventListener('change', updateRecipientPreview);
+            }
+            if (scenarioSelect) {
+                scenarioSelect.addEventListener('change', updateScenarioFields);
+            }
+            updateAudienceFields();
+            updateScenarioFields();
+        })();
+    </script>
 </body>
 </html>

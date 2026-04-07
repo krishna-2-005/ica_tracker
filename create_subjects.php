@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/activity_logger.php';
@@ -1043,6 +1043,14 @@ $filter_class_labels = array_values(array_filter($filter_class_labels, static fu
             font-weight: 600;
             margin-bottom: 10px;
         }
+        .contact-hours-toggle input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+            flex: 0 0 auto;
+        }
+        .contact-hours-block {
+            min-height: 0;
+        }
         .contact-hours-fields input[type="number"] {
             width: 100%;
             margin-bottom: 6px;
@@ -1151,7 +1159,7 @@ $filter_class_labels = array_values(array_filter($filter_class_labels, static fu
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
                         <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -1343,7 +1351,7 @@ $filter_class_labels = array_values(array_filter($filter_class_labels, static fu
                                                     <button type="button" class="table-action-btn subject-cancel-btn" style="display:none; background-color:#6c757d;">Cancel</button>
                                                     <button type="button" class="table-action-btn subject-delete-btn" style="background-color:#d32f2f;">Delete</button>
                                                 <?php else: ?>
-                                                    <span style="color:#999;">—</span>
+                                                    <span style="color:#999;">-</span>
                                                 <?php endif; ?>
                                             </td>
                                         </tr>
@@ -2149,3 +2157,5 @@ $filter_class_labels = array_values(array_filter($filter_class_labels, static fu
     </script>
 </body>
 </html>
+
+

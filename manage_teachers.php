@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin') {
@@ -428,7 +428,7 @@ $teachers_result = mysqli_query($conn, $teachers_query);
             <a href="change_roles.php"><i class="fas fa-user-cog"></i> <span>Change Roles</span></a>
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
             <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -678,3 +678,5 @@ $teachers_result = mysqli_query($conn, $teachers_query);
     </script>
 </body>
 </html>
+
+

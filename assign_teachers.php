@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
@@ -935,11 +935,31 @@ usort($teacher_card_data, static function ($a, $b) {
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
+        .teacher-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 10px;
+            align-items: start;
+        }
         .teacher-card {
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 8px;
+            gap: 6px;
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 12px;
+            background: #f9f9f9;
+            text-align: left;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+        }
+        .teacher-card-title {
+            font-weight: 600;
+            font-size: 0.98rem;
+            color: #a6192e;
+            line-height: 1.3;
         }
         .teacher-card.teacher-card-active {
             border-color: #a6192e;
@@ -954,11 +974,13 @@ usort($teacher_card_data, static function ($a, $b) {
             display: none;
             width: 100%;
             border-top: 1px solid #e0e0e0;
-            padding-top: 10px;
+            padding-top: 8px;
             margin-top: 4px;
             background: #ffffff;
             border-radius: 6px;
-            padding: 12px;
+            padding: 10px;
+            max-height: 260px;
+            overflow: auto;
         }
         .teacher-card.teacher-card-active .teacher-card-details {
             display: block;
@@ -992,7 +1014,7 @@ usort($teacher_card_data, static function ($a, $b) {
             letter-spacing: 0.03em;
         }
         .teacher-card-details-row {
-            padding: 6px 0;
+            padding: 5px 0;
             border-bottom: 1px solid #f0f0f0;
         }
         .teacher-card-details-row:last-child {
@@ -1001,6 +1023,11 @@ usort($teacher_card_data, static function ($a, $b) {
         .teacher-card-details-empty {
             font-size: 0.85rem;
             color: #777;
+        }
+        @media (max-width: 768px) {
+            .teacher-card-grid {
+                grid-template-columns: 1fr;
+            }
         }
         .ica-components-wrapper {
             padding: 12px;
@@ -1082,7 +1109,7 @@ usort($teacher_card_data, static function ($a, $b) {
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
                        <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -1149,14 +1176,14 @@ usort($teacher_card_data, static function ($a, $b) {
                     <div class="card" id="teacher-overview-card">
                         <div class="card-header"><h5 style="margin:0;">Teacher Overview</h5></div>
                         <div class="card-body">
-                            <div class="teacher-card-grid" style="display:flex; flex-wrap:wrap; gap:12px;">
+                            <div class="teacher-card-grid">
                                 <?php foreach ($teacher_card_data as $card): ?>
-                                    <button type="button" class="teacher-card" data-teacher-name="<?php echo htmlspecialchars($card['teacher_name']); ?>" style="flex:1 1 240px; min-width:240px; border:1px solid #ddd; border-radius:8px; padding:16px; background:#f9f9f9; text-align:left; cursor:pointer;">
-                                        <div style="font-weight:600; font-size:1rem; color:#a6192e;">
+                                    <button type="button" class="teacher-card" data-teacher-name="<?php echo htmlspecialchars($card['teacher_name']); ?>">
+                                        <div class="teacher-card-title">
                                             <?php echo htmlspecialchars($card['teacher_name']); ?>
                                         </div>
                                         <div class="teacher-card-meta">
-                                            <?php echo (int)$card['subject_count']; ?> Subjects • <?php echo (int)$card['class_count']; ?> Classes
+                                            <?php echo (int)$card['subject_count']; ?> Subjects - <?php echo (int)$card['class_count']; ?> Classes
                                         </div>
                                         <div class="teacher-card-details">
                                             <?php if (!empty($card['assignments'])): ?>
@@ -1509,7 +1536,7 @@ usort($teacher_card_data, static function ($a, $b) {
 
                 components.forEach(function(component) {
                     const row = document.createElement('tr');
-                    const teacherLabel = component.teacher_name_display || component.teacher_name || '—';
+                    const teacherLabel = component.teacher_name_display || component.teacher_name || '-';
                     row.innerHTML = '<td>' + (component.component_name || '-') + '</td>' +
                         '<td>' + (component.instances ?? '-') + '</td>' +
                         '<td>' + (component.marks_per_instance ?? '-') + '</td>' +
@@ -2200,4 +2227,6 @@ usort($teacher_card_data, static function ($a, $b) {
     </script>
 </body>
 </html>
+
+
 

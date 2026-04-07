@@ -67,6 +67,7 @@ if (!$studentInfo) {
 }
 
 $classId = $studentInfo['class_id'] ? (int)$studentInfo['class_id'] : null;
+$sectionId = $studentInfo['section_id'] ? (int)$studentInfo['section_id'] : 0;
 $className = $studentInfo['class_name'] ?? 'N/A';
 $sectionName = $studentInfo['section_name'] ?? 'N/A';
 $semesterLabel = $studentInfo['semester'] ?? 'N/A';
@@ -136,6 +137,7 @@ $pageError = '';
 
 $hasTimelineColumn = false;
 $hasBroadcastColumn = false;
+<<<<<<< HEAD
 if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?")) {
     $timelineCol = 'timeline';
     mysqli_stmt_bind_param($colStmt, 's', $timelineCol);
@@ -151,6 +153,28 @@ if ($colStmt = mysqli_prepare($conn, "SHOW COLUMNS FROM class_timetables LIKE ?"
     $broadcastRes = mysqli_stmt_get_result($colStmt);
     $hasBroadcastColumn = $broadcastRes && mysqli_num_rows($broadcastRes) > 0;
     mysqli_stmt_close($colStmt);
+=======
+$hasSectionColumn = false;
+$timelineColEscaped = mysqli_real_escape_string($conn, 'timeline');
+$timelineResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$timelineColEscaped}'");
+if ($timelineResult) {
+    $hasTimelineColumn = mysqli_num_rows($timelineResult) > 0;
+    mysqli_free_result($timelineResult);
+}
+
+$broadcastColEscaped = mysqli_real_escape_string($conn, 'is_broadcast');
+$broadcastResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$broadcastColEscaped}'");
+if ($broadcastResult) {
+    $hasBroadcastColumn = mysqli_num_rows($broadcastResult) > 0;
+    mysqli_free_result($broadcastResult);
+}
+
+$sectionColEscaped = mysqli_real_escape_string($conn, 'section_id');
+$sectionResult = mysqli_query($conn, "SHOW COLUMNS FROM `class_timetables` LIKE '{$sectionColEscaped}'");
+if ($sectionResult) {
+    $hasSectionColumn = mysqli_num_rows($sectionResult) > 0;
+    mysqli_free_result($sectionResult);
+>>>>>>> 9cfec46 (Modified files)
 }
 
 if ($classId === null) {
@@ -160,10 +184,22 @@ if ($classId === null) {
     $broadcastSelect = $hasBroadcastColumn ? 'is_broadcast' : '0 AS is_broadcast';
     $ttSql = "SELECT file_name, file_path, uploaded_at, {$timelineSelect}, {$broadcastSelect}
               FROM class_timetables
-              WHERE class_id = ?
+              WHERE class_id = ?";
+    if ($hasSectionColumn) {
+        if ($hasBroadcastColumn) {
+            $ttSql .= " AND (COALESCE(section_id, 0) = ? OR (COALESCE(section_id, 0) = 0 AND COALESCE(is_broadcast, 0) = 1))";
+        } else {
+            $ttSql .= " AND COALESCE(section_id, 0) = ?";
+        }
+    }
+    $ttSql .= "
               ORDER BY uploaded_at DESC";
     if ($stmtTimetable = mysqli_prepare($conn, $ttSql)) {
-        mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
+        if ($hasSectionColumn) {
+            mysqli_stmt_bind_param($stmtTimetable, 'ii', $classId, $sectionId);
+        } else {
+            mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
+        }
         mysqli_stmt_execute($stmtTimetable);
         $ttRes = mysqli_stmt_get_result($stmtTimetable);
         while ($row = mysqli_fetch_assoc($ttRes)) {
@@ -354,6 +390,11 @@ mysqli_close($conn);
             color: #8a5a00;
             border: 1px solid #fcd59a;
         }
+        .upload-info {
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: flex-end;
+        }
     </style>
 </head>
 <body>
@@ -375,36 +416,24 @@ mysqli_close($conn);
                     <h2>Your Timetables</h2>
                     <p>Download the latest schedules shared with your class.</p>
                 </div>
-                <?php if ($latestUploadLabel): ?>
-                    <span class="upload-tag"><i class="fas fa-cloud-upload-alt"></i> Latest upload: <?php echo htmlspecialchars($latestUploadLabel); ?></span>
-                <?php endif; ?>
             </div>
             <div class="container">
+                <?php if ($latestUploadLabel): ?>
+                    <div class="upload-info">
+                        <span class="upload-tag"><i class="fas fa-cloud-upload-alt"></i> Latest upload: <?php echo htmlspecialchars($latestUploadLabel); ?></span>
+                    </div>
+                <?php endif; ?>
                 <?php if ($pageError !== ''): ?>
                     <div class="notice"><?php echo htmlspecialchars($pageError); ?></div>
                 <?php endif; ?>
 
-                <div class="card-grid">
-                    <div class="card stat-card">
-                        <span class="stat-label">Available files</span>
-                        <h3><?php echo $fileCount; ?></h3>
-                        <p><?php echo $fileCount > 0 ? 'Timetable downloads ready for you.' : 'No files uploaded yet.'; ?></p>
-                    </div>
-                    <div class="card stat-card secondary">
-                        <span class="stat-label">Class</span>
-                        <h3><?php echo htmlspecialchars($classNameDisplay); ?></h3>
-                        <p>Section <?php echo htmlspecialchars($sectionDisplay); ?></p>
-                    </div>
-                    <div class="card stat-card">
-                        <span class="stat-label">Semester</span>
-                        <h3><?php echo htmlspecialchars($semesterDisplay); ?></h3>
-                        <p><?php echo htmlspecialchars($schoolDisplay); ?></p>
-                    </div>
-                </div>
-
                     <div class="card">
                         <h3 class="section-title">Class Details</h3>
                         <div class="detail-grid">
+                            <div class="detail-box">
+                                <span class="detail-label">Available Files</span>
+                                <span class="detail-value"><?php echo (int)$fileCount; ?></span>
+                            </div>
                             <div class="detail-box">
                                 <span class="detail-label">Class</span>
                                 <span class="detail-value"><?php echo htmlspecialchars($classNameDisplay); ?></span>

@@ -34,9 +34,14 @@ if (!function_exists('send_app_mail')) {
         if (is_file($legacyConfigFile)) {
             $legacyConfig = include $legacyConfigFile;
             if (is_array($legacyConfig)) {
-                $config = array_replace($config, array_filter($legacyConfig, static function ($value) {
+                $legacyConfig = array_filter($legacyConfig, static function ($value) {
                     return $value !== null && $value !== '';
-                }));
+                });
+                foreach ($legacyConfig as $key => $value) {
+                    if (!array_key_exists($key, $config) || $config[$key] === null || $config[$key] === '') {
+                        $config[$key] = $value;
+                    }
+                }
             }
         }
 

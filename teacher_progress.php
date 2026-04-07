@@ -8,6 +8,61 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'program_chair') {
     exit;
 }
 
+function columnExists(mysqli $conn, string $table, string $column): bool
+{
+    $table = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $column = preg_replace('/[^A-Za-z0-9_]/', '', $column);
+    if ($table === '' || $column === '') {
+        return false;
+    }
+    $check = mysqli_query($conn, "SHOW COLUMNS FROM `{$table}` LIKE '{$column}'");
+    $exists = $check && mysqli_num_rows($check) > 0;
+    if ($check) {
+        mysqli_free_result($check);
+    }
+    return $exists;
+}
+
+if (!function_exists('normalize_elective_short_label')) {
+    function normalize_elective_short_label(?string $value): string
+    {
+        $raw = trim((string)$value);
+        if ($raw === '') {
+            return '';
+        }
+
+        $upper = function_exists('mb_strtoupper') ? mb_strtoupper($raw, 'UTF-8') : strtoupper($raw);
+        if (preg_match('/\bOE\s*\d+\s*-\s*[A-Z0-9]+\b/u', $upper, $match)) {
+            return preg_replace('/\s+/', '', str_replace(' - ', '-', trim($match[0])));
+        }
+
+        if (preg_match('/\b(open|department(?:al)?)\s*elective\b/iu', $raw) !== 1) {
+            return $raw;
+        }
+
+        $number = '';
+        if (preg_match('/\belective\s*([0-9]+)\b/iu', $raw, $numMatch) === 1) {
+            $number = (string)$numMatch[1];
+        } elseif (preg_match('/\b([0-9]+)\b/u', $raw, $numMatch) === 1) {
+            $number = (string)$numMatch[1];
+        }
+
+        $code = '';
+        if (preg_match('/[-:\/]\s*([A-Za-z0-9]+)\s*$/u', $raw, $codeMatch) === 1) {
+            $code = strtoupper(trim((string)$codeMatch[1]));
+        }
+
+        if ($number !== '' && $code !== '') {
+            return 'OE' . $number . '-' . $code;
+        }
+
+        return $upper;
+    }
+}
+
+$class_has_school = columnExists($conn, 'classes', 'school');
+$class_has_department = columnExists($conn, 'classes', 'department');
+
 $current_program_chair_id = (int)($_SESSION['user_id'] ?? 0);
 $syllabus_threshold = get_syllabus_threshold($conn, $current_program_chair_id);
 $performance_threshold = get_performance_threshold($conn, $current_program_chair_id);
@@ -127,6 +182,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
     $courses_sql = "
         SELECT
             s.subject_name,
+            COALESCE(NULLIF(s.short_name, ''), s.subject_name) AS subject_display,
             c.class_name,
             c.semester,
             c.school,
@@ -142,9 +198,24 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
     $course_types = 'i';
     $course_params = [$teacher_id];
     if ($detail_school_filter !== '') {
-        $courses_sql .= " AND c.school = ?";
-        $course_types .= 's';
-        $course_params[] = $detail_school_filter;
+        $course_school_clauses = [];
+        if ($class_has_school) {
+            $course_school_clauses[] = 'c.school = ?';
+            $course_types .= 's';
+            $course_params[] = $detail_school_filter;
+        }
+        if ($class_has_department) {
+            if ($class_has_school) {
+                $course_school_clauses[] = "((c.school IS NULL OR c.school = '') AND c.department = ?)";
+            } else {
+                $course_school_clauses[] = 'c.department = ?';
+            }
+            $course_types .= 's';
+            $course_params[] = $detail_school_filter;
+        }
+        if (!empty($course_school_clauses)) {
+            $courses_sql .= ' AND (' . implode(' OR ', $course_school_clauses) . ')';
+        }
     }
     if ($detail_semester_filter !== null) {
         $courses_sql .= " AND c.semester = ?";
@@ -184,7 +255,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
     if ($courses_result) {
         while ($row = mysqli_fetch_assoc($courses_result)) {
             $classLabel = format_class_label(
-                $row['class_name'] ?? '',
+                normalize_elective_short_label($row['class_name'] ?? ''),
                 $row['section_name'] ?? '',
                 $row['semester'] ?? '',
                 $row['school'] ?? ''
@@ -194,7 +265,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
             }
 
             $courses_data[] = [
-                'subject_name' => $row['subject_name'],
+                'subject_name' => normalize_elective_short_label($row['subject_display'] ?? $row['subject_name'] ?? ''),
                 'class_name' => $row['class_name'],
                 'section_name' => $row['section_name'],
                 'semester' => $row['semester'],
@@ -217,9 +288,24 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
     $filtered_taught_types = 'i';
     $filtered_taught_params = [$teacher_id];
     if ($detail_school_filter !== '') {
-        $filtered_taught_subquery .= " AND cls.school = ?";
-        $filtered_taught_types .= 's';
-        $filtered_taught_params[] = $detail_school_filter;
+        $taught_school_clauses = [];
+        if ($class_has_school) {
+            $taught_school_clauses[] = 'cls.school = ?';
+            $filtered_taught_types .= 's';
+            $filtered_taught_params[] = $detail_school_filter;
+        }
+        if ($class_has_department) {
+            if ($class_has_school) {
+                $taught_school_clauses[] = "((cls.school IS NULL OR cls.school = '') AND cls.department = ?)";
+            } else {
+                $taught_school_clauses[] = 'cls.department = ?';
+            }
+            $filtered_taught_types .= 's';
+            $filtered_taught_params[] = $detail_school_filter;
+        }
+        if (!empty($taught_school_clauses)) {
+            $filtered_taught_subquery .= ' AND (' . implode(' OR ', $taught_school_clauses) . ')';
+        }
     }
     if ($detail_semester_filter !== null) {
         $filtered_taught_subquery .= " AND cls.semester = ?";
@@ -431,8 +517,21 @@ $classes_list = [];
 $semester_sql = "SELECT DISTINCT semester FROM classes";
 $semester_has_where = false;
 if ($school_filter !== '') {
-    $semester_sql .= " WHERE school = ?";
-    $semester_has_where = true;
+    $semester_school_clauses = [];
+    if ($class_has_school) {
+        $semester_school_clauses[] = 'school = ?';
+    }
+    if ($class_has_department) {
+        if ($class_has_school) {
+            $semester_school_clauses[] = "((school IS NULL OR school = '') AND department = ?)";
+        } else {
+            $semester_school_clauses[] = 'department = ?';
+        }
+    }
+    if (!empty($semester_school_clauses)) {
+        $semester_sql .= ' WHERE (' . implode(' OR ', $semester_school_clauses) . ')';
+        $semester_has_where = true;
+    }
 }
 if ($activeTermId > 0) {
     $termCond = "(academic_term_id = " . (int)$activeTermId . " OR academic_term_id IS NULL)";
@@ -445,7 +544,11 @@ $semester_sql .= " ORDER BY CAST(semester AS UNSIGNED) ASC";
 $semester_stmt = mysqli_prepare($conn, $semester_sql);
 if ($semester_stmt) {
     if ($semester_has_where) {
-        mysqli_stmt_bind_param($semester_stmt, "s", $school_filter);
+        if ($class_has_school && $class_has_department) {
+            mysqli_stmt_bind_param($semester_stmt, "ss", $school_filter, $school_filter);
+        } else {
+            mysqli_stmt_bind_param($semester_stmt, "s", $school_filter);
+        }
     }
     mysqli_stmt_execute($semester_stmt);
     $semester_result = mysqli_stmt_get_result($semester_stmt);
@@ -464,9 +567,24 @@ $class_types = '';
 $class_params = [];
 
 if ($school_filter !== '') {
-    $class_conditions[] = "school = ?";
-    $class_types .= 's';
-    $class_params[] = $school_filter;
+    $class_school_clauses = [];
+    if ($class_has_school) {
+        $class_school_clauses[] = 'school = ?';
+        $class_types .= 's';
+        $class_params[] = $school_filter;
+    }
+    if ($class_has_department) {
+        if ($class_has_school) {
+            $class_school_clauses[] = "((school IS NULL OR school = '') AND department = ?)";
+        } else {
+            $class_school_clauses[] = 'department = ?';
+        }
+        $class_types .= 's';
+        $class_params[] = $school_filter;
+    }
+    if (!empty($class_school_clauses)) {
+        $class_conditions[] = '(' . implode(' OR ', $class_school_clauses) . ')';
+    }
 }
 if ($semester_filter !== '') {
     $class_conditions[] = "semester = ?";
@@ -494,7 +612,7 @@ if ($class_stmt) {
         while ($row = mysqli_fetch_assoc($class_result)) {
             $classes_list[] = [
                 'id' => (int)$row['id'],
-                'name' => $row['class_name'],
+                'name' => normalize_elective_short_label($row['class_name']),
                 'semester' => (int)$row['semester']
             ];
         }
@@ -699,7 +817,6 @@ while ($row = mysqli_fetch_assoc($result)) {
     $chartData['resolvedAlerts'][] = $row['resolved_alerts'];
 
     $totalTeachers++;
-    $totalStudents += $row['student_count'];
     $sumCompletion += $row['avg_completion'];
     if ($row['avg_student_mark'] !== null) {
         $sumAvgMarks += $row['avg_student_mark'];
@@ -716,6 +833,59 @@ while ($row = mysqli_fetch_assoc($result)) {
 }
 
 mysqli_stmt_close($stmt);
+
+$student_scope_conditions = [];
+if ($school_filter !== '') {
+    $escaped_school_scope = mysqli_real_escape_string($conn, $school_filter);
+    $scope_school_clauses = [];
+    if ($class_has_school) {
+        $scope_school_clauses[] = "cls_scope.school = '{$escaped_school_scope}'";
+    }
+    if ($class_has_department) {
+        if ($class_has_school) {
+            $scope_school_clauses[] = "((cls_scope.school IS NULL OR cls_scope.school = '') AND cls_scope.department = '{$escaped_school_scope}')";
+        } else {
+            $scope_school_clauses[] = "cls_scope.department = '{$escaped_school_scope}'";
+        }
+    }
+    if (!empty($scope_school_clauses)) {
+        $student_scope_conditions[] = '(' . implode(' OR ', $scope_school_clauses) . ')';
+    }
+}
+if ($semester_filter !== '') {
+    $student_scope_conditions[] = 'cls_scope.semester = ' . (int)$semester_filter;
+}
+if ($class_filter !== '') {
+    $student_scope_conditions[] = 'tsa.class_id = ' . (int)$class_filter;
+}
+if ($activeTermId > 0) {
+    $term_id = (int)$activeTermId;
+    $student_scope_conditions[] = "(cls_scope.academic_term_id = {$term_id} OR cls_scope.academic_term_id IS NULL)";
+}
+
+$student_scope_sql = "
+    SELECT COUNT(DISTINCT CASE
+        WHEN TRIM(COALESCE(st.sap_id, '')) <> '' THEN UPPER(TRIM(st.sap_id))
+        ELSE CONCAT('ID#', CAST(st.id AS CHAR))
+    END) AS total_students
+    FROM students st
+    JOIN (
+        SELECT DISTINCT tsa.class_id, COALESCE(tsa.section_id, 0) AS section_id
+        FROM teacher_subject_assignments tsa
+        INNER JOIN classes cls_scope ON cls_scope.id = tsa.class_id";
+if (!empty($student_scope_conditions)) {
+    $student_scope_sql .= ' WHERE ' . implode(' AND ', $student_scope_conditions);
+}
+$student_scope_sql .= "
+    ) scoped ON scoped.class_id = st.class_id
+           AND (scoped.section_id = 0 OR COALESCE(st.section_id, 0) = scoped.section_id)";
+
+$student_scope_result = mysqli_query($conn, $student_scope_sql);
+$totalStudents = 0;
+if ($student_scope_result && ($student_scope_row = mysqli_fetch_assoc($student_scope_result))) {
+    $totalStudents = (int)($student_scope_row['total_students'] ?? 0);
+    mysqli_free_result($student_scope_result);
+}
 
 $overallAvgCompletion = $totalTeachers ? round($sumCompletion / $totalTeachers, 1) : 0;
 $overallAvgStudentMark = $teachersWithMarks ? round($sumAvgMarks / $teachersWithMarks, 1) : 0;
@@ -831,12 +1001,21 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             gap: 15px;
             margin-bottom: 20px;
         }
+        .insight-grid.insight-grid-static {
+            grid-template-columns: repeat(7, minmax(120px, 1fr));
+            gap: 10px;
+            align-items: stretch;
+        }
         .insight-card {
             background: #f9f9f9;
             border-radius: 12px;
             padding: 18px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.05);
             transition: box-shadow 0.15s ease;
+        }
+        .insight-grid.insight-grid-static .insight-card {
+            padding: 12px;
+            border-radius: 10px;
         }
         .insight-card[data-insight] {
             cursor: pointer;
@@ -850,10 +1029,19 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             color: #555;
             margin-bottom: 6px;
         }
+        .insight-grid.insight-grid-static .insight-card .label {
+            font-size: 0.78rem;
+            margin-bottom: 4px;
+            line-height: 1.2;
+        }
         .insight-card .value {
             font-size: 1.4rem;
             font-weight: 700;
             color: #A6192E;
+        }
+        .insight-grid.insight-grid-static .insight-card .value {
+            font-size: 1.12rem;
+            line-height: 1.25;
         }
         .insight-card .value-subtext {
             display: block;
@@ -910,27 +1098,40 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 15px;
             margin-bottom: 10px;
-            grid-auto-rows: 1fr;
+            grid-auto-rows: auto;
         }
         .filter-grid .form-group {
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            height: 100%;
+            gap: 6px;
+            height: auto;
         }
         .filter-grid label {
             display: block;
             font-weight: 600;
             color: #A6192E;
             margin-bottom: 0;
+            font-size: 0.94rem;
         }
         .filter-grid select {
             width: 100%;
-            padding: 8px 10px;
+            padding: 4px 8px;
             border-radius: 8px;
             border: 1px solid #ccc;
             background-color: #fff;
-            flex-grow: 1;
+            flex-grow: 0;
+            font-size: 0.86rem;
+            font-weight: 500;
+            letter-spacing: 0;
+            word-spacing: 0;
+            height: 34px;
+            min-height: 34px;
+            line-height: 1.25;
+        }
+        .filter-grid select option {
+            font-size: 0.84rem;
+            letter-spacing: 0;
+            word-spacing: 0;
         }
         .filter-actions {
             display: flex;
@@ -1134,7 +1335,7 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
                 <div class="card">
                     <div class="card-header"><h5>Program Chair Insights</h5></div>
                     <div class="card-body">
-                        <div class="insight-grid">
+                        <div class="insight-grid insight-grid-static">
                             <div class="insight-card" data-insight="total_teachers">
                                 <span class="label">Total Teachers</span>
                                 <span class="value"><?php echo $totalTeachers; ?></span>

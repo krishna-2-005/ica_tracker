@@ -22,13 +22,13 @@ if ($class_id <= 0) {
 if ($section_id > 0) {
     if ($history_table_exists) {
         $query = "SELECT * FROM (
-                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
+                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
                     FROM students st
                     JOIN classes c ON st.class_id = c.id
                     LEFT JOIN sections sec ON st.section_id = sec.id
                     WHERE st.class_id = ? AND st.section_id = ?
                     UNION ALL
-                    SELECT st.id, st.sap_id, st.roll_number, st.name, h.class_id AS class_id, h.section_id, c.class_name, c.school, c.semester, sec.section_name, 1 AS is_historical
+                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, h.class_id AS class_id, h.section_id, c.class_name, c.school, c.semester, sec.section_name, 1 AS is_historical
                     FROM student_class_history h
                     JOIN students st ON st.id = h.student_id
                     JOIN classes c ON h.class_id = c.id
@@ -39,7 +39,7 @@ if ($section_id > 0) {
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param($stmt, "iiii", $class_id, $section_id, $class_id, $section_id);
     } else {
-        $query = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
+        $query = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
                 FROM students st
                 JOIN classes c ON st.class_id = c.id
                 LEFT JOIN sections sec ON st.section_id = sec.id
@@ -51,13 +51,13 @@ if ($section_id > 0) {
 } else {
     if ($history_table_exists) {
         $query = "SELECT * FROM (
-                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
+                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
                     FROM students st
                     JOIN classes c ON st.class_id = c.id
                     LEFT JOIN sections sec ON st.section_id = sec.id
                     WHERE st.class_id = ?
                     UNION ALL
-                    SELECT st.id, st.sap_id, st.roll_number, st.name, h.class_id AS class_id, h.section_id, c.class_name, c.school, c.semester, sec.section_name, 1 AS is_historical
+                    SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, h.class_id AS class_id, h.section_id, c.class_name, c.school, c.semester, sec.section_name, 1 AS is_historical
                     FROM student_class_history h
                     JOIN students st ON st.id = h.student_id
                     JOIN classes c ON h.class_id = c.id
@@ -68,7 +68,7 @@ if ($section_id > 0) {
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param($stmt, "ii", $class_id, $class_id);
     } else {
-        $query = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
+        $query = "SELECT st.id, st.sap_id, st.roll_number, st.name, st.college_email, st.class_id, st.section_id, c.class_name, c.school, c.semester, sec.section_name, 0 AS is_historical
                 FROM students st
                 JOIN classes c ON st.class_id = c.id
                 LEFT JOIN sections sec ON st.section_id = sec.id

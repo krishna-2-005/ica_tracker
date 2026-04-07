@@ -743,11 +743,19 @@ mysqli_stmt_close($stmt_mid_marks);
         .progress-status.status-negative { background:#fff5f5; color:#b10024; border:1px solid #f3d4da; }
         .progress-status.status-neutral { background:#f0f4f7; color:#2c3e50; border:1px solid #d6e0ea; }
         
+<<<<<<< HEAD
         #subject-details-panel { display: none; margin-top: 14px; padding: 14px; border-radius: 10px; background-color: #f8f9fa; }
         .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 10px; }
         .subject-meta { margin-bottom: 6px; font-size: 0.9rem; color: #444; line-height: 1.35; }
         #subject-details-panel h5 { font-size: 1rem; margin: 10px 0 8px; }
         #subject-details-panel p { margin-bottom: 8px; }
+=======
+        #subject-details-panel { display: none; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background-color: #f8f9fa; }
+        .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 6px; }
+        .subject-meta { margin: 0 0 4px; font-size: 0.9rem; color: #444; line-height: 1.25; }
+        #subject-details-panel h5 { font-size: 1rem; margin: 8px 0 6px; }
+        #subject-details-panel p { margin-bottom: 4px; }
+>>>>>>> 9cfec46 (Modified files)
         .details-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
         #subject-details-panel .details-actions .btn {
             display: inline-flex;

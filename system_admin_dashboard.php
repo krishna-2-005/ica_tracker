@@ -134,7 +134,7 @@ mysqli_close($conn);
         <h2>ICA Tracker</h2>
         <a href="system_admin_dashboard.php" class="active"><i class="fas fa-shield-alt"></i> <span>Dashboard</span></a>
         <a href="system_admin_activity_feed.php"><i class="fas fa-stream"></i> <span>Activity Feed</span></a>
-        <a href="system_admin_export_sql.php"><i class="fas fa-database"></i> <span>SQL Snapshot</span></a>
+        <a href="system_admin_export_sql.php"><i class="fas fa-database"></i> <span>Backup & Restore</span></a>
         <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
     </div>
 
@@ -171,10 +171,6 @@ mysqli_close($conn);
                     <div class="sa-stat-icon si-teal"><i class="fas fa-layer-group"></i></div>
                     <div class="sa-stat-info"><h4>Classes</h4><div class="sa-stat-val"><?php echo $totalClasses; ?></div><div class="sa-stat-sub">Active</div></div>
                 </div>
-                <div class="sa-stat">
-                    <div class="sa-stat-icon si-blue"><i class="fas fa-book"></i></div>
-                    <div class="sa-stat-info"><h4>Subjects</h4><div class="sa-stat-val"><?php echo $totalSubjects; ?></div><div class="sa-stat-sub">Total</div></div>
-                </div>
             </div>
 
             <p class="section-label">Analytics</p>
@@ -203,7 +199,7 @@ mysqli_close($conn);
             <p class="section-label">Quick Actions</p>
             <div class="quick-links">
                 <a href="system_admin_activity_feed.php" class="quick-link"><i class="fas fa-stream"></i> Activity Feed</a>
-                <a href="system_admin_export_sql.php" class="quick-link"><i class="fas fa-database"></i> SQL Snapshot</a>
+                <a href="system_admin_export_sql.php" class="quick-link"><i class="fas fa-database"></i> Backup & Restore</a>
                 <a href="system_admin_activity_feed.php?scope=today&activity_preset=failed_logins" class="quick-link"><i class="fas fa-exclamation-circle"></i> Failed Logins</a>
                 <a href="system_admin_activity_feed.php?scope=today&activity_preset=sensitive_actions" class="quick-link"><i class="fas fa-lock"></i> Sensitive Actions</a>
                 <a href="system_admin_activity_feed.php?scope=all" class="quick-link"><i class="fas fa-history"></i> Full Audit Log</a>

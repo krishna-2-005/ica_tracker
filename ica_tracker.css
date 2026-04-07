@@ -34,6 +34,8 @@ body.dark-mode {
 .dashboard {
     min-height: 100vh;
     min-height: 100dvh;
+    height: 100vh;
+    height: 100dvh;
     padding-left: var(--sidebar-width);
     width: 100%;
     overflow-x: hidden;
@@ -94,8 +96,8 @@ body.dark-mode {
     max-width: calc(100vw - var(--sidebar-width));
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
-    min-height: 100dvh;
+    min-height: 100%;
+    height: 100%;
     flex: 1;
 }
 
@@ -112,12 +114,14 @@ body.dark-mode {
     justify-content: space-between;
     align-items: center;
     background: #fff;
-    padding: 16px 20px;
+    padding: 12px 18px;
+    min-height: 72px;
     border-radius: 10px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     margin-bottom: 24px;
     position: relative;
-    padding-right: 240px;
+    overflow: hidden;
+    padding-right: 210px;
 }
 .header::after {
     content: '';
@@ -125,20 +129,20 @@ body.dark-mode {
     right: 20px;
     top: 50%;
     transform: translateY(-50%);
-    width: 200px;
-    height: 70px;
+    width: 170px;
+    height: 56px;
     background: url('nmimshorizontal.jpg') center/contain no-repeat;
     pointer-events: none;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+    filter: none;
 }
 
 @media (max-width: 768px) {
     .header {
-        padding-right: 170px;
+        padding-right: 145px;
     }
     .header::after {
-        width: 150px;
-        height: 52px;
+        width: 125px;
+        height: 42px;
     }
 }
 
@@ -529,9 +533,19 @@ body.program-chair {
     font-size: 0.95rem;
 }
 
+body.program-chair .main-content {
+    padding: 14px 20px 0;
+}
+
+body.program-chair .container {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
 body.program-chair .header {
     padding: 14px 18px;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
 }
 
 body.program-chair .header h2 {
@@ -544,12 +558,48 @@ body.program-chair .header::after {
 }
 
 body.program-chair .card {
-    padding: 12px;
+    padding: 10px 12px;
     border-radius: 8px;
+}
+
+body.program-chair .card-header {
+    margin-bottom: 8px;
+}
+
+body.program-chair .card-header h3,
+body.program-chair .card-header h4,
+body.program-chair .card-header h5,
+body.program-chair .card-header h6 {
+    margin: 0;
+}
+
+body.program-chair .card-body {
+    padding: 0;
+}
+
+body.program-chair .section-label,
+body.program-chair .section-title,
+body.program-chair .section-title-sm,
+body.program-chair h2,
+body.program-chair h3,
+body.program-chair h4,
+body.program-chair h5,
+body.program-chair h6 {
+    margin-bottom: 8px;
 }
 
 body.program-chair .card-grid {
     gap: 12px;
+}
+
+body.program-chair .overview-grid,
+body.program-chair .chart-grid,
+body.program-chair .progress-grid,
+body.program-chair .subject-chart-grid,
+body.program-chair .sa-stats,
+body.program-chair .filters-grid {
+    gap: 12px;
+    margin-bottom: 12px;
 }
 
 body.program-chair .stat-card {
@@ -587,7 +637,201 @@ body.program-chair .card p {
 }
 
 body.program-chair .filter-grid {
-    gap: 12px;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+body.program-chair .filters,
+body.program-chair .filter-wrap,
+body.program-chair .filter-panel,
+body.program-chair .filter-bar,
+body.program-chair .actions-bar {
+    margin-bottom: 10px;
+}
+
+body.program-chair .actions-bar {
+    gap: 8px;
+}
+
+body.program-chair form {
+    padding: 14px;
+    margin-bottom: 12px;
+}
+
+body.program-chair .form-group {
+    margin-bottom: 10px;
+}
+
+body.program-chair label {
+    margin-bottom: 4px;
+    font-size: 0.9rem;
+}
+
+body.program-chair select,
+body.program-chair input,
+body.program-chair textarea {
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+body.program-chair button,
+body.program-chair .btn {
+    padding: 8px 16px;
+    font-size: 0.88rem;
+}
+
+body.program-chair .table-wrapper,
+body.program-chair .table-responsive {
+    margin-bottom: 10px;
+}
+
+body.program-chair table {
+    margin-bottom: 12px;
+}
+
+@media (max-width: 768px) {
+    body.program-chair .main-content {
+        padding: 10px 12px 0;
+    }
+
+    body.program-chair .container {
+        gap: 10px;
+    }
+
+    body.program-chair .header {
+        margin-bottom: 10px;
+    }
+
+    body.program-chair .card,
+    body.program-chair form {
+        padding: 10px;
+    }
+
+    body.program-chair .filter-grid {
+        gap: 8px;
+    }
+
+    body.program-chair table th,
+    body.program-chair table td {
+        padding: 7px 8px;
+    }
+}
+
+body.teacher-role {
+    font-size: 0.93rem;
+}
+
+body.teacher-role .dashboard {
+    --sidebar-width: 200px;
+}
+
+body.teacher-role .sidebar {
+    padding: 12px;
+}
+
+body.teacher-role .sidebar h2 {
+    font-size: 1.2rem;
+    margin-bottom: 16px;
+}
+
+body.teacher-role .sidebar a {
+    padding: 8px 10px;
+    margin: 5px 0;
+    font-size: 0.9rem;
+}
+
+body.teacher-role .sidebar a i {
+    font-size: 0.95rem;
+    margin-right: 8px;
+}
+
+body.teacher-role .main-content {
+    padding: 12px 16px 0;
+    max-width: calc(100vw - var(--sidebar-width));
+}
+
+body.teacher-role .header {
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    padding-right: 200px;
+}
+
+body.teacher-role .header::after {
+    width: 160px;
+    height: 56px;
+    right: 14px;
+}
+
+body.teacher-role .header h2 {
+    font-size: 1.35rem;
+}
+
+body.teacher-role .header p {
+    font-size: 0.84rem;
+}
+
+body.teacher-role .card {
+    padding: 10px;
+    border-radius: 8px;
+}
+
+body.teacher-role .card-header {
+    margin-bottom: 8px;
+}
+
+body.teacher-role .card-header h5,
+body.teacher-role .card h3,
+body.teacher-role .card h2 {
+    font-size: 1.12rem;
+}
+
+body.teacher-role .form-group {
+    margin-bottom: 10px;
+}
+
+body.teacher-role label {
+    font-size: 0.9rem;
+}
+
+body.teacher-role select,
+body.teacher-role input,
+body.teacher-role textarea {
+    padding: 8px 10px;
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+}
+
+body.teacher-role button,
+body.teacher-role .btn {
+    padding: 8px 16px;
+    font-size: 0.88rem;
+}
+
+body.teacher-role th,
+body.teacher-role td {
+    padding: 8px 9px;
+    font-size: 0.86rem;
+}
+
+body.teacher-role .tag,
+body.teacher-role .status-pill,
+body.teacher-role .badge-count,
+body.teacher-role .text-muted,
+body.teacher-role .table-note {
+    font-size: 0.78rem;
+}
+
+@media (max-width: 768px) {
+    body.teacher-role .header {
+        padding-right: 150px;
+    }
+
+    body.teacher-role .header::after {
+        width: 130px;
+        height: 46px;
+        right: 10px;
+    }
 }
 
 body.teacher-role {
@@ -1020,4 +1264,296 @@ body.teacher-role .table-note {
 .assignment-focus-row td {
     border-top: 1px solid rgba(166, 25, 46, 0.25);
     border-bottom: 1px solid rgba(166, 25, 46, 0.25);
+}
+
+/* Compact spacing for admin pages */
+.sidebar {
+    padding: 12px;
+}
+
+.sidebar h2 {
+    margin-bottom: 18px;
+}
+
+.sidebar a {
+    padding: 8px 10px;
+    margin: 6px 0;
+}
+
+.main-content {
+    padding: 12px 16px 0;
+}
+
+.header {
+    padding: 12px 16px;
+    margin-bottom: 16px;
+}
+
+.header::after {
+    right: 16px;
+}
+
+.class-filter {
+    padding: 14px;
+    margin-bottom: 16px;
+}
+
+form {
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+select, input {
+    padding: 8px;
+    margin-bottom: 10px;
+}
+
+button,
+.btn {
+    padding: 8px 18px;
+}
+
+table {
+    margin-bottom: 16px;
+}
+
+th, td {
+    padding: 9px;
+}
+
+.dashboard .main-content .footer-bottom {
+    margin: 16px -16px 0;
+    padding: 12px 16px;
+    margin-top: auto;
+}
+
+.card {
+    padding: 12px;
+}
+
+.card-header {
+    margin-bottom: 10px;
+}
+
+.form-group {
+    margin-bottom: 10px;
+}
+
+.card-grid {
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.info-list {
+    gap: 10px;
+}
+
+.info-row {
+    padding: 8px 12px;
+}
+
+.pill-list {
+    gap: 8px;
+}
+
+.download-list,
+.todo-list {
+    gap: 10px;
+}
+
+.download-item,
+.todo-item {
+    padding: 10px 12px;
+    gap: 10px;
+}
+
+@media (max-width: 768px) {
+    .main-content {
+        padding: 10px 12px 0;
+    }
+
+    .header {
+        margin-bottom: 12px;
+    }
+
+    .class-filter,
+    form,
+    table {
+        margin-bottom: 12px;
+    }
+
+    .dashboard .main-content .footer-bottom {
+        margin: 12px -12px 0;
+        padding: 10px 12px;
+        margin-top: auto;
+    }
+}
+
+/* Consolidated Program Dashboard styles (migrated from program_dashboard.css) */
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.overview-card {
+    background: linear-gradient(160deg, rgba(166, 25, 46, 0.14) 0%, rgba(255, 255, 255, 0.92) 70%);
+    border-radius: 14px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid rgba(166, 25, 46, 0.18);
+    box-shadow: 0 10px 18px rgba(166, 25, 46, 0.12);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.overview-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 24px 36px rgba(166, 25, 46, 0.2);
+}
+
+.overview-card i {
+    font-size: 1.8rem;
+    padding: 10px;
+    border-radius: 14px;
+    color: #fff;
+    background: linear-gradient(135deg, #A6192E 0%, #c4384a 100%);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.2);
+}
+
+.overview-card .card-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.overview-card .card-label {
+    font-size: 0.8rem;
+    color: #4b5563;
+    margin-top: 2px;
+}
+
+.chart-container {
+    position: relative;
+    height: 360px;
+    margin-top: 18px;
+}
+
+.filter-container {
+    text-align: right;
+    margin-bottom: 18px;
+}
+
+.filter-container select {
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    font-size: 0.95rem;
+}
+
+.filter-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.filter-header h5 {
+    margin: 0;
+}
+
+.link-reset {
+    font-size: 0.9rem;
+    color: #A6192E;
+    font-weight: 600;
+    background: rgba(166, 25, 46, 0.08);
+    padding: 8px 14px;
+    border-radius: 20px;
+    transition: background 0.2s ease;
+}
+
+.link-reset:hover {
+    background: rgba(166, 25, 46, 0.16);
+}
+
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+    align-items: end;
+}
+
+.filter-grid .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.filter-grid label {
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.92rem;
+}
+
+.filter-grid select {
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid #d5d9e7;
+    background: #fff;
+    font-size: 0.95rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.filter-grid select:focus {
+    outline: none;
+    border-color: #A6192E;
+    box-shadow: 0 0 0 3px rgba(166, 25, 46, 0.15);
+}
+
+.filter-actions {
+    justify-content: flex-end;
+}
+
+.filter-actions .btn {
+    width: 100%;
+}
+
+body.dark-mode .filter-grid label {
+    color: #f3f4f6;
+}
+
+body.dark-mode .filter-grid select {
+    background: #4b4b4b;
+    color: #f9fafb;
+    border-color: #666;
+}
+
+body.dark-mode .link-reset {
+    background: rgba(255, 255, 255, 0.1);
+    color: #f9fafb;
+}
+
+@media (max-width: 768px) {
+    .filter-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .filter-actions {
+        align-items: stretch;
+    }
+
+    .filter-actions .btn {
+        width: 100%;
+    }
+
+    .overview-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .filter-container {
+        text-align: left;
+    }
 }

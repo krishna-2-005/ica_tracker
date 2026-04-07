@@ -74,12 +74,14 @@ body.dark-mode {
     justify-content: space-between;
     align-items: center;
     background: #FFFFFF;
-    padding: 15px 20px;
+    padding: 11px 16px;
+    min-height: 70px;
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
     margin-bottom: 20px;
     position: relative;
-    padding-right: 210px;
+    overflow: hidden;
+    padding-right: 186px;
 }
 
 .header::after {
@@ -88,20 +90,20 @@ body.dark-mode {
     right: 16px;
     top: 50%;
     transform: translateY(-50%);
-    width: 185px;
-    height: 62px;
+    width: 158px;
+    height: 52px;
     background: url('../nmimshorizontal.jpg') center/contain no-repeat;
     pointer-events: none;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+    filter: none;
 }
 
 @media (max-width: 768px) {
     .header {
-        padding-right: 160px;
+        padding-right: 136px;
     }
     .header::after {
-        width: 140px;
-        height: 46px;
+        width: 118px;
+        height: 40px;
     }
 }
 

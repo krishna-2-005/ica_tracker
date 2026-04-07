@@ -1,6 +1,7 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/academic_context.php';
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['admin', 'program_chair'], true)) {
     header('Location: login.php');
     exit;
@@ -142,46 +143,76 @@ if (!function_exists('format_class_display_name')) {
     }
 }
 
-$classes = [];
-$class_query = "SELECT c.id AS class_id,
-                       c.class_name,
-                       c.semester,
-                       c.school,
-                       sec.id AS section_id,
-                       sec.section_name
-                FROM classes c
-                LEFT JOIN sections sec ON sec.class_id = c.id
-                ORDER BY c.class_name,
-                         CASE WHEN sec.section_name IS NULL OR sec.section_name = '' THEN 1 ELSE 0 END,
-                         sec.section_name";
-$class_result = mysqli_query($conn, $class_query);
-if ($class_result) {
-    $class_map = [];
-    while ($row = mysqli_fetch_assoc($class_result)) {
-        $class_id = isset($row['class_id']) ? (int)$row['class_id'] : 0;
-        $section_id = isset($row['section_id']) ? (int)$row['section_id'] : 0;
-        $class_name = isset($row['class_name']) ? trim((string)$row['class_name']) : '';
-        $section_name = isset($row['section_name']) ? trim((string)$row['section_name']) : '';
-        $semester_raw = isset($row['semester']) ? trim((string)$row['semester']) : '';
-        $school_name = isset($row['school']) ? trim((string)$row['school']) : '';
-
-        $label = format_class_label($class_name, $section_name, $semester_raw, $school_name);
-
-        $key = $class_id . '|' . $section_id;
-        if (!isset($class_map[$key])) {
-            $class_map[$key] = [
-                'class_id' => $class_id,
-                'class_name' => $class_name,
-                'section_id' => $section_id,
-                'section_name' => $section_name,
-                'semester' => $semester_raw,
-                'school' => $school_name,
-                'label' => $label !== '' ? $label : format_class_display_name($class_name)
-            ];
-        }
+$adminSchool = isset($_SESSION['school']) ? trim((string)$_SESSION['school']) : '';
+$timeline_terms = fetchAcademicTerms($conn, ['school_name' => $adminSchool]);
+if (empty($timeline_terms)) {
+    $timeline_terms = fetchAcademicTerms($conn);
+}
+$timeline_term_map = [];
+foreach ($timeline_terms as $termRow) {
+    $termId = isset($termRow['id']) ? (int)$termRow['id'] : 0;
+    if ($termId > 0) {
+        $timeline_term_map[$termId] = $termRow;
     }
-    mysqli_free_result($class_result);
-    $classes = array_values($class_map);
+}
+
+$selected_timeline_term_id = isset($_REQUEST['timeline_term_id']) ? (int)$_REQUEST['timeline_term_id'] : 0;
+if ($selected_timeline_term_id > 0 && !isset($timeline_term_map[$selected_timeline_term_id])) {
+    $selected_timeline_term_id = 0;
+}
+
+$classes = [];
+if ($selected_timeline_term_id > 0) {
+    $class_query = "SELECT c.id AS class_id,
+                           c.class_name,
+                           c.semester,
+                           c.school,
+                           c.academic_term_id,
+                           sec.id AS section_id,
+                           sec.section_name
+                    FROM classes c
+                    LEFT JOIN sections sec ON sec.class_id = c.id
+                    WHERE c.academic_term_id = ?
+                    ORDER BY c.class_name,
+                             CASE WHEN sec.section_name IS NULL OR sec.section_name = '' THEN 1 ELSE 0 END,
+                             sec.section_name";
+    $class_stmt = mysqli_prepare($conn, $class_query);
+    if ($class_stmt) {
+        mysqli_stmt_bind_param($class_stmt, 'i', $selected_timeline_term_id);
+        mysqli_stmt_execute($class_stmt);
+        $class_result = mysqli_stmt_get_result($class_stmt);
+        if ($class_result) {
+            $class_map = [];
+            while ($row = mysqli_fetch_assoc($class_result)) {
+                $class_id = isset($row['class_id']) ? (int)$row['class_id'] : 0;
+                $section_id = isset($row['section_id']) ? (int)$row['section_id'] : 0;
+                $class_name = isset($row['class_name']) ? trim((string)$row['class_name']) : '';
+                $section_name = isset($row['section_name']) ? trim((string)$row['section_name']) : '';
+                $semester_raw = isset($row['semester']) ? trim((string)$row['semester']) : '';
+                $school_name = isset($row['school']) ? trim((string)$row['school']) : '';
+                $class_term_id = isset($row['academic_term_id']) ? (int)$row['academic_term_id'] : 0;
+
+                $label = format_class_label($class_name, $section_name, $semester_raw, $school_name);
+
+                $key = $class_id . '|' . $section_id;
+                if (!isset($class_map[$key])) {
+                    $class_map[$key] = [
+                        'class_id' => $class_id,
+                        'class_name' => $class_name,
+                        'section_id' => $section_id,
+                        'section_name' => $section_name,
+                        'semester' => $semester_raw,
+                        'school' => $school_name,
+                        'academic_term_id' => $class_term_id,
+                        'label' => $label !== '' ? $label : format_class_display_name($class_name)
+                    ];
+                }
+            }
+            mysqli_free_result($class_result);
+            $classes = array_values($class_map);
+        }
+        mysqli_stmt_close($class_stmt);
+    }
 }
 
 $parseClassKey = static function ($value): array {
@@ -221,6 +252,21 @@ if ($selected_class_id <= 0) {
 }
 
 $selected_class_key = $selected_class_id > 0 ? $selected_class_id . '|' . $selected_section_id : '';
+
+$selected_class_is_valid = false;
+if ($selected_class_id > 0) {
+    foreach ($classes as $class_row_check) {
+        if ((int)$class_row_check['class_id'] === $selected_class_id && (int)$class_row_check['section_id'] === $selected_section_id) {
+            $selected_class_is_valid = true;
+            break;
+        }
+    }
+    if (!$selected_class_is_valid) {
+        $selected_class_id = 0;
+        $selected_section_id = 0;
+        $selected_class_key = '';
+    }
+}
 
 function fetchElectiveSubjects(mysqli $conn, int $class_id, int $section_id = 0): array {
     if ($class_id <= 0) {
@@ -419,7 +465,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $subject_counts = calculateSubjectCounts($existing_choices);
             $success = $updated_count > 0 ? "Saved elective assignments for {$updated_count} students." : 'No changes were necessary.';
             $_SESSION['manage_electives_success'] = $success;
-            $redirectUrl = $_SERVER['PHP_SELF'] . '?class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$selected_subject_id;
+            $redirectUrl = $_SERVER['PHP_SELF'] . '?timeline_term_id=' . (int)$selected_timeline_term_id . '&class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$selected_subject_id;
             header('Location: ' . $redirectUrl);
             exit;
         }
@@ -483,7 +529,7 @@ foreach ($classes as $class_row) {
             <a href="change_roles.php"><i class="fas fa-user-cog"></i> <span>Change Roles</span></a>
             <a href="bulk_add_students.php"><i class="fas fa-file-upload"></i> <span>Add Students</span></a>
             <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -495,10 +541,30 @@ foreach ($classes as $class_row) {
                     <div class="card-header"><h5>Manage Elective Enrollments</h5></div>
                     <div class="card-body">
                         <form method="GET" style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
+                            <div class="form-group" style="min-width:300px;">
+                                <label>Select Timeline</label>
+                                <select name="timeline_term_id" id="timeline-selector" required>
+                                    <option value="">Choose timeline</option>
+                                    <?php foreach ($timeline_terms as $term_row): ?>
+                                        <?php
+                                            $termId = isset($term_row['id']) ? (int)$term_row['id'] : 0;
+                                            if ($termId <= 0) {
+                                                continue;
+                                            }
+                                            $isTimelineSelected = $selected_timeline_term_id === $termId;
+                                            $termLabel = trim((string)($term_row['label'] ?? ''));
+                                            if ($termLabel === '') {
+                                                $termLabel = 'Timeline ' . $termId;
+                                            }
+                                        ?>
+                                        <option value="<?php echo $termId; ?>" <?php echo $isTimelineSelected ? 'selected' : ''; ?>><?php echo htmlspecialchars($termLabel); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
                             <div class="form-group" style="min-width:240px;">
                                 <label>Select Class</label>
-                                <select name="class_key" id="class-selector" required>
-                                    <option value="">Choose a class</option>
+                                <select name="class_key" id="class-selector" <?php echo $selected_timeline_term_id > 0 ? 'required' : 'disabled'; ?>>
+                                    <option value=""><?php echo $selected_timeline_term_id > 0 ? 'Choose a class' : 'Choose timeline first'; ?></option>
                                     <?php foreach ($classes as $class_row): ?>
                                         <?php
                                             $optionValue = $class_row['class_id'] . '|' . $class_row['section_id'];
@@ -509,7 +575,7 @@ foreach ($classes as $class_row) {
                                     <?php endforeach; ?>
                                 </select>
                             </div>
-                            <button type="submit" class="btn">Load Students</button>
+                            <button type="submit" class="btn" <?php echo $selected_timeline_term_id > 0 ? '' : 'disabled'; ?>>Load Students</button>
                         </form>
                         <?php if ($error): ?>
                             <div class="info-banner warning" style="margin-top:16px; font-weight:600;"><?php echo htmlspecialchars($error); ?></div>
@@ -532,7 +598,7 @@ foreach ($classes as $class_row) {
                                             $isActiveElective = $selected_subject_id === (int)$sub_id;
                                             $electiveLabel = $sub_name . ' (Elective)';
                                             $countForElective = $subject_counts[$sub_id] ?? 0;
-                                            $electiveLink = $_SERVER['PHP_SELF'] . '?class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$sub_id;
+                                            $electiveLink = $_SERVER['PHP_SELF'] . '?timeline_term_id=' . (int)$selected_timeline_term_id . '&class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$sub_id;
                                         ?>
                                         <a href="<?php echo htmlspecialchars($electiveLink); ?>" class="elective-button<?php echo $isActiveElective ? ' active' : ''; ?>">
                                             <span><?php echo htmlspecialchars($electiveLabel); ?></span>
@@ -555,6 +621,7 @@ foreach ($classes as $class_row) {
                                     <form method="POST" style="margin-top:20px;">
                                         <input type="hidden" name="class_id" value="<?php echo (int)$selected_class_id; ?>">
                                         <input type="hidden" name="section_id" value="<?php echo (int)$selected_section_id; ?>">
+                                        <input type="hidden" name="timeline_term_id" value="<?php echo (int)$selected_timeline_term_id; ?>">
                                         <input type="hidden" name="class_key" value="<?php echo htmlspecialchars($selected_class_key); ?>">
                                         <input type="hidden" name="subject_id" value="<?php echo (int)$selected_subject_id; ?>">
                                         <div class="info-banner info" style="margin-bottom:16px;">
@@ -612,7 +679,7 @@ foreach ($classes as $class_row) {
                                         </div>
                                         <div style="margin-top:18px; display:flex; gap:12px;">
                                             <button type="submit" class="btn">Save Assignments</button>
-                                            <?php $resetLink = $_SERVER['PHP_SELF'] . '?class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$selected_subject_id; ?>
+                                            <?php $resetLink = $_SERVER['PHP_SELF'] . '?timeline_term_id=' . (int)$selected_timeline_term_id . '&class_key=' . rawurlencode($selected_class_key) . '&subject_id=' . (int)$selected_subject_id; ?>
                                             <a href="<?php echo htmlspecialchars($resetLink); ?>" class="btn" style="background:#63666A;">Reset</a>
                                         </div>
                                     </form>
@@ -621,7 +688,15 @@ foreach ($classes as $class_row) {
                                 <?php endif; ?>
                             <?php endif; ?>
                         <?php else: ?>
-                            <div class="info-banner info" style="margin-top:20px;">Select a class to begin assigning electives to students.</div>
+                            <?php
+                                $emptyStateMessage = 'Select a timeline first, then choose a class.';
+                                if ($selected_timeline_term_id > 0) {
+                                    $emptyStateMessage = empty($classes)
+                                        ? 'No classes are mapped to the selected timeline.'
+                                        : 'Select a class to begin assigning electives to students.';
+                                }
+                            ?>
+                            <div class="info-banner info" style="margin-top:20px;"><?php echo htmlspecialchars($emptyStateMessage); ?></div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -630,7 +705,25 @@ foreach ($classes as $class_row) {
     </div>
     <script>
         (function () {
+            var timelineSelect = document.getElementById('timeline-selector');
             var classSelect = document.getElementById('class-selector');
+            if (timelineSelect) {
+                timelineSelect.addEventListener('change', function () {
+                    var timelineValue = this.value;
+                    var basePath = window.location.pathname;
+                    if (!timelineValue) {
+                        window.location.href = basePath;
+                        return;
+                    }
+                    var timelineParams = new URLSearchParams(window.location.search);
+                    timelineParams.set('timeline_term_id', timelineValue);
+                    timelineParams.delete('class_key');
+                    timelineParams.delete('class_id');
+                    timelineParams.delete('section_id');
+                    timelineParams.delete('subject_id');
+                    window.location.href = basePath + '?' + timelineParams.toString();
+                });
+            }
             if (classSelect) {
                 classSelect.addEventListener('change', function () {
                     var targetValue = this.value;
@@ -642,6 +735,8 @@ foreach ($classes as $class_row) {
                     var params = new URLSearchParams(window.location.search);
                     params.set('class_key', targetValue);
                     params.delete('subject_id');
+                    params.delete('class_id');
+                    params.delete('section_id');
                     window.location.href = basePath + '?' + params.toString();
                 });
             }
@@ -733,4 +828,6 @@ foreach ($classes as $class_row) {
     </script>
 </body>
 </html>
+
+
 

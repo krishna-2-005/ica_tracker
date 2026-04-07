@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/init.php';
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/academic_context.php';
@@ -513,6 +513,79 @@ $classes_query = "SELECT c.*,
                   GROUP BY c.id
                   ORDER BY c.school, c.semester, c.class_name";
 $classes_result = mysqli_query($conn, $classes_query);
+
+$existing_classes = [];
+$existing_class_filters = [];
+if ($classes_result) {
+    while ($class_row = mysqli_fetch_assoc($classes_result)) {
+        $timeline_label = 'Not linked';
+        if (!empty($class_row['academic_term_id'])) {
+            $label_parts = [];
+            if (!empty($class_row['calendar_label_override'])) {
+                $label_parts[] = $class_row['calendar_label_override'];
+            } else {
+                if (!empty($class_row['calendar_semester_number'])) {
+                    $label_parts[] = 'Semester ' . (int)$class_row['calendar_semester_number'];
+                }
+                if (!empty($class_row['calendar_semester_term'])) {
+                    $label_parts[] = ucfirst((string)$class_row['calendar_semester_term']) . ' Term';
+                }
+                if (!empty($class_row['calendar_academic_year'])) {
+                    $label_parts[] = 'AY ' . $class_row['calendar_academic_year'];
+                }
+            }
+            if (!empty($class_row['calendar_start_date']) && !empty($class_row['calendar_end_date'])) {
+                $label_parts[] = date('d M Y', strtotime($class_row['calendar_start_date'])) . ' - ' . date('d M Y', strtotime($class_row['calendar_end_date']));
+            }
+            $compiled_label = implode(' - ', array_filter($label_parts));
+            if ($compiled_label !== '') {
+                $timeline_label = $compiled_label;
+            }
+        }
+
+        $semesterValue = $class_row['semester'] ?? '';
+        $semesterDigits = preg_replace('/[^0-9]/', '', (string)$semesterValue);
+        $semesterNumber = $semesterDigits !== '' ? (int)$semesterDigits : 0;
+        $semesterTermRaw = strtolower(trim((string)($class_row['calendar_semester_term'] ?? '')));
+        $semesterParity = 'other';
+        if ($semesterTermRaw === 'odd' || $semesterTermRaw === 'even') {
+            $semesterParity = $semesterTermRaw;
+        } elseif ($semesterNumber > 0) {
+            $semesterParity = ($semesterNumber % 2 === 0) ? 'even' : 'odd';
+        }
+
+        $termId = !empty($class_row['academic_term_id']) ? (int)$class_row['academic_term_id'] : 0;
+        $filterKey = $termId > 0
+            ? 'term_' . $termId
+            : 'sem_' . ($semesterDigits !== '' ? $semesterDigits : 'unknown') . '_' . $semesterParity;
+
+        $filterLabelParts = [];
+        if ($semesterParity === 'odd' || $semesterParity === 'even') {
+            $filterLabelParts[] = ucfirst($semesterParity) . ' Term';
+        }
+        if ($semesterDigits !== '') {
+            $filterLabelParts[] = 'Sem ' . $semesterDigits;
+        }
+        if (!empty($class_row['calendar_academic_year'])) {
+            $filterLabelParts[] = 'AY ' . $class_row['calendar_academic_year'];
+        }
+        $filterLabel = !empty($filterLabelParts)
+            ? implode(' - ', $filterLabelParts)
+            : ('Semester ' . ($semesterValue !== '' ? $semesterValue : 'N/A'));
+
+        if (!isset($existing_class_filters[$filterKey])) {
+            $existing_class_filters[$filterKey] = [
+                'key' => $filterKey,
+                'label' => $filterLabel,
+            ];
+        }
+
+        $class_row['_timeline_label'] = $timeline_label;
+        $class_row['_filter_key'] = $filterKey;
+        $class_row['_semester_parity'] = $semesterParity;
+        $existing_classes[] = $class_row;
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -553,8 +626,43 @@ $classes_result = mysqli_query($conn, $classes_query);
         .action-buttons {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
             align-items: stretch;
+        }
+        .action-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: nowrap;
+        }
+        .timeline-update-form {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+        }
+        .timeline-update-form select {
+            min-width: 180px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            margin-bottom: 0;
+        }
+        .class-list-table th,
+        .class-list-table td {
+            padding: 8px 10px;
+            vertical-align: middle;
+            line-height: 1.35;
+        }
+        .class-list-table .action-buttons form {
+            background: transparent;
+            box-shadow: none;
+            border-radius: 0;
+            padding: 0;
+            margin: 0;
+        }
+        .class-list-table .action-buttons select {
+            margin-bottom: 0;
         }
         .action-buttons .btn {
             margin-top: 0;
@@ -699,7 +807,7 @@ $classes_result = mysqli_query($conn, $classes_query);
             <a href="bulk_add_students.php"><i class="fas fa-user-plus"></i> <span>Add Students</span></a>
                         <a href="manage_academic_calendar.php"><i class="fas fa-calendar-alt"></i> <span>Academic Calendar</span></a>
 
-            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Test Mail</span></a>
+            <a href="test_mail.php"><i class="fas fa-envelope-open-text"></i> <span>Manual Mailing</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -792,10 +900,12 @@ $classes_result = mysqli_query($conn, $classes_query);
                     <div class="card-header"><h5>Existing Classes</h5></div>
                     <div class="card-body">
                         <div class="term-filter-group" id="existing_classes_filters">
-                            <button type="button" class="term-filter-button" data-filter="odd">Odd Term</button>
-                            <button type="button" class="term-filter-button" data-filter="even">Even Term</button>
+                            <?php foreach ($existing_class_filters as $filter): ?>
+                                <button type="button" class="term-filter-button" data-filter="<?php echo htmlspecialchars($filter['key']); ?>"><?php echo htmlspecialchars($filter['label']); ?></button>
+                            <?php endforeach; ?>
                         </div>
-                        <table>
+                        <small id="existing-classes-helper" style="display:block; margin: 2px 0 10px; color:#4c5264;">Tap a semester timeline above to view classes.</small>
+                        <table class="class-list-table" id="existing-classes-table" style="display:none;">
                             <thead>
                                 <tr>
                                     <th>Class Name</th>
@@ -808,75 +918,48 @@ $classes_result = mysqli_query($conn, $classes_query);
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while ($class = mysqli_fetch_assoc($classes_result)) {
-                                    $timeline_label = 'Not linked';
-                                    if (!empty($class['academic_term_id'])) {
-                                        $label_parts = [];
-                                        if (!empty($class['calendar_label_override'])) {
-                                            $label_parts[] = $class['calendar_label_override'];
-                                        } else {
-                                            if (!empty($class['calendar_semester_number'])) {
-                                                $label_parts[] = 'Semester ' . (int)$class['calendar_semester_number'];
-                                            }
-                                            if (!empty($class['calendar_semester_term'])) {
-                                                $label_parts[] = ucfirst((string)$class['calendar_semester_term']) . ' Term';
-                                            }
-                                            if (!empty($class['calendar_academic_year'])) {
-                                                $label_parts[] = 'AY ' . $class['calendar_academic_year'];
-                                            }
-                                        }
-                                        if (!empty($class['calendar_start_date']) && !empty($class['calendar_end_date'])) {
-                                            $label_parts[] = date('d M Y', strtotime($class['calendar_start_date'])) . ' - ' . date('d M Y', strtotime($class['calendar_end_date']));
-                                        }
-                                        $compiled_label = implode(' • ', array_filter($label_parts));
-                                        if ($compiled_label !== '') {
-                                            $timeline_label = $compiled_label;
-                                        }
-                                    }
+                                <?php foreach ($existing_classes as $class) {
                                     $class_terms = $terms_by_school[$class['school']] ?? [];
                                     $current_term_id = !empty($class['academic_term_id']) ? (int)$class['academic_term_id'] : 0;
-                                    $semesterValue = $class['semester'] ?? '';
-                                    $semesterDigits = preg_replace('/[^0-9]/', '', (string)$semesterValue);
-                                    $semesterNumber = $semesterDigits !== '' ? (int)$semesterDigits : 0;
-                                    $semesterParity = $semesterNumber > 0 ? (($semesterNumber % 2 === 0) ? 'even' : 'odd') : 'other';
                                     $divisions_raw = strtoupper(trim((string)($class['divisions'] ?? '')));
                                     $divisions_display = $divisions_raw !== '' ? $divisions_raw : 'N/A';
                                     $description_raw = strtoupper(trim((string)($class['description'] ?? '')));
                                     $description_display = $description_raw !== '' ? $description_raw : 'N/A';
                                 ?>
-                                    <tr data-semester-row data-parity="<?php echo htmlspecialchars($semesterParity); ?>">
+                                    <tr data-semester-row data-filter-key="<?php echo htmlspecialchars((string)($class['_filter_key'] ?? '')); ?>" style="display:none;">
                                         <td><?php echo htmlspecialchars(strtoupper($class['class_name'])); ?></td>
                                         <td><?php echo htmlspecialchars($class['school']); ?></td>
                                         <td><?php echo htmlspecialchars($class['semester']); ?></td>
-                                        <td><?php echo htmlspecialchars($timeline_label); ?></td>
+                                        <td><?php echo htmlspecialchars((string)($class['_timeline_label'] ?? 'Not linked')); ?></td>
                                         <td><?php echo htmlspecialchars($divisions_display); ?></td>
                                         <td><?php echo htmlspecialchars($description_display); ?></td>
                                         <td>
                                             <div class="action-buttons">
-                                                <form method="POST" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                                                    <input type="hidden" name="action" value="update_timeline">
-                                                    <input type="hidden" name="class_id" value="<?php echo (int)$class['id']; ?>">
-                                                    <select name="academic_term_id" style="min-width:180px; padding:6px 8px; border-radius:6px; border:1px solid #ccc;"
-                                                        <?php echo empty($class_terms) ? 'disabled' : ''; ?>>
-                                                        <option value="" <?php echo $current_term_id === 0 ? 'selected' : ''; ?>>Not linked</option>
-                                                        <?php foreach ($class_terms as $term_option) {
-                                                            $term_id = (int)$term_option['id'];
-                                                            $selected_attr = ($term_id === $current_term_id) ? 'selected' : '';
-                                                            echo '<option value="' . $term_id . '" ' . $selected_attr . '>' . htmlspecialchars($term_option['label'], ENT_QUOTES, 'UTF-8') . '</option>';
-                                                        }
-                                                        ?>
-                                                    </select>
-                                                    <button type="submit" class="btn" style="padding:6px 12px; font-size:0.85rem;">Update</button>
-                                                </form>
-                                                <button type="button" class="btn secondary edit-class-btn" style="padding:6px 12px; font-size:0.85rem;"
-                                                    data-class-id="<?php echo (int)$class['id']; ?>"
-                                                    data-class-name="<?php echo htmlspecialchars(strtoupper($class['class_name']), ENT_QUOTES, 'UTF-8'); ?>"
-                                                    data-school="<?php echo htmlspecialchars($class['school'], ENT_QUOTES, 'UTF-8'); ?>"
-                                                    data-semester="<?php echo htmlspecialchars($class['semester'], ENT_QUOTES, 'UTF-8'); ?>"
-                                                    data-divisions="<?php echo htmlspecialchars($divisions_raw, ENT_QUOTES, 'UTF-8'); ?>"
-                                                    data-description="<?php echo htmlspecialchars($description_raw, ENT_QUOTES, 'UTF-8'); ?>"
-                                                    data-term-id="<?php echo $current_term_id; ?>"
-                                                >Edit</button>
+                                                <div class="action-controls">
+                                                    <form method="POST" class="timeline-update-form">
+                                                        <input type="hidden" name="action" value="update_timeline">
+                                                        <input type="hidden" name="class_id" value="<?php echo (int)$class['id']; ?>">
+                                                        <select name="academic_term_id" <?php echo empty($class_terms) ? 'disabled' : ''; ?>>
+                                                            <option value="" <?php echo $current_term_id === 0 ? 'selected' : ''; ?>>Not linked</option>
+                                                            <?php foreach ($class_terms as $term_option) {
+                                                                $term_id = (int)$term_option['id'];
+                                                                $selected_attr = ($term_id === $current_term_id) ? 'selected' : '';
+                                                                echo '<option value="' . $term_id . '" ' . $selected_attr . '>' . htmlspecialchars($term_option['label'], ENT_QUOTES, 'UTF-8') . '</option>';
+                                                            }
+                                                            ?>
+                                                        </select>
+                                                        <button type="submit" class="btn" style="padding:6px 12px; font-size:0.85rem;">Update</button>
+                                                    </form>
+                                                    <button type="button" class="btn secondary edit-class-btn" style="padding:6px 12px; font-size:0.85rem;"
+                                                        data-class-id="<?php echo (int)$class['id']; ?>"
+                                                        data-class-name="<?php echo htmlspecialchars(strtoupper($class['class_name']), ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-school="<?php echo htmlspecialchars($class['school'], ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-semester="<?php echo htmlspecialchars($class['semester'], ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-divisions="<?php echo htmlspecialchars($divisions_raw, ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-description="<?php echo htmlspecialchars($description_raw, ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-term-id="<?php echo $current_term_id; ?>"
+                                                    >Edit</button>
+                                                </div>
                                                 <?php if (empty($class_terms)) { ?>
                                                     <small>Add a calendar for <?php echo htmlspecialchars($class['school']); ?> to enable linking.</small>
                                                 <?php } ?>
@@ -1550,6 +1633,8 @@ $classes_result = mysqli_query($conn, $classes_query);
 
             const classFilterButtons = Array.from(document.querySelectorAll('#existing_classes_filters .term-filter-button'));
             const classRows = Array.from(document.querySelectorAll('[data-semester-row]'));
+            const existingClassesTable = document.getElementById('existing-classes-table');
+            const existingClassesHelper = document.getElementById('existing-classes-helper');
             if (classFilterButtons.length && classRows.length) {
                 let activeFilter = '';
                 classFilterButtons.forEach(function (button) {
@@ -1566,14 +1651,31 @@ $classes_result = mysqli_query($conn, $classes_query);
                                 btn.classList.toggle('active', btn === button);
                             });
                         }
+
+                        if (existingClassesTable) {
+                            existingClassesTable.style.display = activeFilter ? '' : 'none';
+                        }
+                        if (existingClassesHelper) {
+                            existingClassesHelper.textContent = activeFilter
+                                ? 'Showing classes for selected semester timeline.'
+                                : 'Tap a semester timeline above to view classes.';
+                        }
+
                         classRows.forEach(function (row) {
-                            const parity = row.getAttribute('data-parity');
-                            row.style.display = !activeFilter || parity === activeFilter ? '' : 'none';
+                            const rowFilter = row.getAttribute('data-filter-key');
+                            row.style.display = activeFilter && rowFilter === activeFilter ? '' : 'none';
                         });
                     });
                 });
+            } else if (existingClassesTable) {
+                existingClassesTable.style.display = '';
+                if (existingClassesHelper) {
+                    existingClassesHelper.style.display = 'none';
+                }
             }
         })();
     </script>
 </body>
 </html>
+
+
