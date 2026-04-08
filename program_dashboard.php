@@ -166,6 +166,13 @@ $termDateFilter = $academicContext['date_filter'] ?? null;
 $termStartDate = $termDateFilter['start'] ?? null;
 $termEndDate = $termDateFilter['end'] ?? null;
 $activeTermId = isset($activeTerm['id']) ? (int)$activeTerm['id'] : 0;
+$activeTermTypeRaw = strtolower(trim((string)($activeTerm['semester_term'] ?? '')));
+$activeTermParity = '';
+if (strpos($activeTermTypeRaw, 'even') !== false) {
+    $activeTermParity = 'even';
+} elseif (strpos($activeTermTypeRaw, 'odd') !== false) {
+    $activeTermParity = 'odd';
+}
 $termStartBound = $termStartDate ? $termStartDate . ' 00:00:00' : null;
 $termEndBound = $termEndDate ? $termEndDate . ' 23:59:59' : null;
 $termStartEsc = $termStartBound ? mysqli_real_escape_string($conn, $termStartBound) : null;
@@ -208,6 +215,9 @@ $semester_filter = isset($_GET['semester'])
     ? mysqli_real_escape_string($conn, trim((string)$_GET['semester']))
     : '';
 $class_filter = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
+$status_filter_raw = isset($_GET['status']) ? trim((string)$_GET['status']) : '';
+$allowed_status_filters = ['good', 'average', 'at_risk'];
+$status_filter = in_array($status_filter_raw, $allowed_status_filters, true) ? $status_filter_raw : '';
 // departments_result now aliases whichever field is present to 'school' so the front-end can use the same name
 $school_options = [];
 $schools_res = mysqli_query($conn, "SELECT school_name FROM schools ORDER BY school_name");
@@ -244,6 +254,10 @@ if ($school_filter === '' && !$school_param_provided && !empty($pc_school)) {
 $assignment_where_parts = [];
 if ($activeTermId > 0) {
     $assignment_where_parts[] = 'c.academic_term_id = ' . $activeTermId;
+} elseif ($activeTermParity === 'even') {
+    $assignment_where_parts[] = 'CAST(c.semester AS UNSIGNED) % 2 = 0';
+} elseif ($activeTermParity === 'odd') {
+    $assignment_where_parts[] = 'CAST(c.semester AS UNSIGNED) % 2 = 1';
 }
 if ($school_filter !== '') {
     $school_clauses = [];
@@ -308,6 +322,9 @@ if ($semester_filter !== '') {
 }
 if ($class_filter > 0) {
     $card_link_params['class_id'] = $class_filter;
+}
+if ($status_filter !== '') {
+    $card_link_params['status'] = $status_filter;
 }
 $card_link_query = http_build_query($card_link_params);
 $course_progress_link = 'course_progress.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
@@ -1163,16 +1180,55 @@ foreach ($teacher_subject_pairs as $pair) {
 }
 $teachers_monitored = count($teacher_scope_ids);
 $students_in_scope = 0;
-$students_in_scope_q = "SELECT
-        COUNT(DISTINCT CASE
-            WHEN TRIM(COALESCE(st.sap_id, '')) <> '' THEN UPPER(TRIM(st.sap_id))
-            ELSE CONCAT('ID#', CAST(st.id AS CHAR))
-        END) AS total_students
-    FROM students st
-    JOIN (
-        $assignment_scope_sql
-    ) scope ON scope.class_id = st.class_id
-           AND (scope.section_id = 0 OR COALESCE(st.section_id, 0) = scope.section_id)";
+$students_status_where = '';
+if ($status_filter === 'at_risk') {
+    $students_status_where = ' WHERE scoped_students.evaluated_components > 0 AND scoped_students.avg_marks < 50';
+} elseif ($status_filter === 'average') {
+    $students_status_where = ' WHERE scoped_students.evaluated_components > 0 AND scoped_students.avg_marks >= 50 AND scoped_students.avg_marks < 70';
+} elseif ($status_filter === 'good') {
+    $students_status_where = ' WHERE scoped_students.evaluated_components > 0 AND scoped_students.avg_marks >= 70';
+}
+$students_in_scope_q = "SELECT COUNT(*) AS total_students
+    FROM (
+        SELECT
+            st.id,
+            AVG(
+                CASE
+                    WHEN ic.marks_per_instance IS NOT NULL
+                         AND ic.marks_per_instance <> 0
+                         AND ism.marks IS NOT NULL
+                    THEN (ism.marks / ic.marks_per_instance) * 100
+                    ELSE NULL
+                END
+            ) AS avg_marks,
+            SUM(
+                CASE
+                    WHEN ic.marks_per_instance IS NOT NULL
+                         AND ic.marks_per_instance <> 0
+                         AND ism.marks IS NOT NULL
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS evaluated_components
+        FROM students st
+        JOIN (
+            SELECT DISTINCT class_id, section_id
+            FROM (
+                $assignment_scope_sql
+            ) scope_rows
+        ) scope ON scope.class_id = st.class_id
+               AND (scope.section_id = 0 OR COALESCE(st.section_id, 0) = scope.section_id)
+        LEFT JOIN ica_student_marks ism ON ism.student_id = st.id" . ($marksDateCondition ? " AND {$marksDateCondition}" : '') . "
+        LEFT JOIN ica_components ic ON ic.id = ism.component_id
+            AND EXISTS (
+                SELECT 1
+                FROM teacher_subject_assignments tsa_scope
+                WHERE tsa_scope.subject_id = ic.subject_id
+                  AND tsa_scope.class_id = st.class_id
+                  AND (COALESCE(tsa_scope.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa_scope.section_id, 0))
+            )
+        GROUP BY st.id
+    ) scoped_students" . $students_status_where;
 $students_in_scope_res = mysqli_query($conn, $students_in_scope_q);
 if ($students_in_scope_res && ($students_scope_row = mysqli_fetch_assoc($students_in_scope_res))) {
     $students_in_scope = (int)($students_scope_row['total_students'] ?? 0);
@@ -1234,6 +1290,60 @@ if (empty($dashboard_insights)) {
     $dashboard_insights[] = 'No high-priority risk signal detected for the current filters.';
 }
 $dashboard_insights = array_slice($dashboard_insights, 0, 2);
+
+if (isset($_GET['export']) && $_GET['export'] === 'csv') {
+    $filename_parts = ['Program_Dashboard'];
+    if ($school_filter_display !== '') {
+        $filename_parts[] = preg_replace('/[^A-Za-z0-9]+/', '_', $school_filter_display);
+    }
+    if ($semester_filter !== '') {
+        $filename_parts[] = 'Sem_' . preg_replace('/[^A-Za-z0-9]+/', '_', (string)$semester_filter);
+    }
+    if ($class_filter > 0) {
+        $filename_parts[] = 'Class_' . $class_filter;
+    }
+    if ($status_filter !== '') {
+        $filename_parts[] = 'Status_' . $status_filter;
+    }
+    $filename_parts[] = date('Y-m-d');
+    $filename = implode('_', array_filter($filename_parts)) . '.csv';
+    $filename = preg_replace('/_+/', '_', $filename);
+
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+
+    $output = fopen('php://output', 'w');
+    fputcsv($output, ['Teacher', 'Course', 'Class', 'Syllabus (%)', 'Mid Avg (%)', 'Evaluated', 'Total', 'At-Risk', 'Last Update']);
+
+    if ($teacher_performance_result && mysqli_num_rows($teacher_performance_result) > 0) {
+        mysqli_data_seek($teacher_performance_result, 0);
+        while ($row = mysqli_fetch_assoc($teacher_performance_result)) {
+            $teacher_name = isset($row['teacher_name']) ? trim((string)$row['teacher_name']) : '';
+            $teacher_name = $teacher_name !== '' ? format_person_display($teacher_name) : '';
+            $course_name = format_subject_display((string)($row['course_name'] ?? ''));
+            $class_label = isset($row['class_label']) && trim((string)$row['class_label']) !== '' ? trim((string)$row['class_label']) : '—';
+            $completion = isset($row['avg_completion']) ? (float)$row['avg_completion'] : 0.0;
+            $mid_avg = isset($teacher_ica_data[$row['teacher_id']][$row['course_name']]) ? (float)$teacher_ica_data[$row['teacher_id']][$row['course_name']] : null;
+            $meta = $teacher_progress_meta[$row['teacher_id']][$row['course_name']] ?? ['total_students' => 0, 'evaluated_students' => 0, 'at_risk_students' => 0];
+            $last_updated = !empty($row['last_updated']) ? date('d M Y, h:i A', strtotime((string)$row['last_updated'])) : '—';
+
+            fputcsv($output, [
+                $teacher_name,
+                $course_name,
+                $class_label,
+                round($completion),
+                $mid_avg !== null ? round($mid_avg, 2) : 'N/A',
+                (int)($meta['evaluated_students'] ?? 0),
+                (int)($meta['total_students'] ?? 0),
+                (int)($meta['at_risk_students'] ?? 0),
+                $last_updated
+            ]);
+        }
+    }
+
+    fclose($output);
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
@@ -1357,6 +1467,31 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
         .analytics-filter select { min-width: 210px; max-width: 260px; margin: 0; padding: 6px 10px; font-size: 0.86rem; }
         .analytics-header-right { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:8px; }
         .chart-note { margin: 0 0 8px; font-size: 0.78rem; color: #6b7280; }
+        body.program-chair .main-content > .container {
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 0;
+        }
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
+            align-items: end;
+        }
+        .filter-grid .form-group {
+            margin-bottom: 0;
+        }
+        @media (max-width: 1100px) {
+            .filter-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 700px) {
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body class="program-chair">
@@ -1373,6 +1508,7 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             <a href="send_alerts.php"><i class="fas fa-bell"></i> <span>Alerts</span></a>
             <a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+            <a href="login_as.php?role=teacher"><i class="fas fa-exchange-alt"></i> <span>Switch to Teacher</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
 
@@ -1432,7 +1568,6 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                     <div class="card-header">
                         <div class="filter-header">
                             <h5>Filters &amp; Tools</h5>
-                            <a href="program_dashboard.php" class="link-reset">Reset filters</a>
                         </div>
                     </div>
                     <div class="card-body">
@@ -1445,19 +1580,29 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                                 <div class="form-group">
                                     <label for="semester_filter">Semester</label>
                                     <select name="semester" id="semester_filter">
-                                        <option value="">-- Select School --</option>
+                                        <option value="">All semesters</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
                                     <label for="class_filter">Class</label>
-                                    <select name="class_id" id="class_filter">
-                                        <option value="">-- Select Sem --</option>
+                                    <select name="class_id" id="class_filter" <?php echo $semester_filter === '' ? 'disabled' : ''; ?>>
+                                        <option value=""><?php echo $semester_filter === '' ? 'Select semester' : 'All classes'; ?></option>
                                     </select>
                                 </div>
-                                <div class="form-group filter-actions">
-                                    <label>&nbsp;</label>
-                                    <button type="submit" class="btn">Apply Filters</button>
+                                <div class="form-group">
+                                    <label for="status_filter">Status</label>
+                                    <select name="status" id="status_filter">
+                                        <option value="" <?php echo $status_filter === '' ? 'selected' : ''; ?>>All</option>
+                                        <option value="good" <?php echo $status_filter === 'good' ? 'selected' : ''; ?>>Good Standing</option>
+                                        <option value="average" <?php echo $status_filter === 'average' ? 'selected' : ''; ?>>Average</option>
+                                        <option value="at_risk" <?php echo $status_filter === 'at_risk' ? 'selected' : ''; ?>>At-Risk</option>
+                                    </select>
                                 </div>
+                            </div>
+                            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                                <button type="submit" class="btn">Apply Filters</button>
+                                <button type="button" id="resetFiltersBtn" class="btn" style="background:#63666A;">Reset Filters</button>
+                                <button type="button" id="exportCsvBtn" class="btn" <?php echo (!$teacher_performance_result || mysqli_num_rows($teacher_performance_result) === 0) ? 'disabled' : ''; ?>><i class="fas fa-file-csv"></i> Download CSV</button>
                             </div>
                         </form>
                     </div>
@@ -1600,10 +1745,21 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
             const schoolFilter = document.getElementById('school_filter');
             const semFilter = document.getElementById('semester_filter');
             const classFilter = document.getElementById('class_filter');
+            const statusFilter = document.getElementById('status_filter');
+            const resetBtn = document.getElementById('resetFiltersBtn');
+            const exportBtn = document.getElementById('exportCsvBtn');
+            const filterForm = document.getElementById('filterForm');
             
             const currentSchool = <?php echo json_encode($school_filter_display); ?>;
-            const currentSem = '<?php echo $semester_filter; ?>';
-            const currentClass = '<?php echo $class_filter; ?>';
+            const currentSem = <?php echo json_encode((string)$semester_filter); ?>;
+            const currentClass = <?php echo json_encode($class_filter > 0 ? (string)$class_filter : ''); ?>;
+            const currentStatus = <?php echo json_encode($status_filter); ?>;
+            const currentActiveTermId = <?php echo json_encode($activeTermId > 0 ? $activeTermId : 0); ?>;
+            const currentTermType = <?php echo json_encode($activeTermParity); ?>;
+
+            if (statusFilter) {
+                statusFilter.value = currentStatus || '';
+            }
 
             // Populate Department Filter
             schoolFilter.innerHTML = '<option value="">All Schools</option>';
@@ -1633,26 +1789,59 @@ $dashboard_insights = array_slice($dashboard_insights, 0, 2);
                 });
             }
 
+            function buildTermScopedUrl(basePath, extraParams = {}) {
+                const params = new URLSearchParams(extraParams);
+                if (currentActiveTermId && Number(currentActiveTermId) > 0) {
+                    params.set('active_term_id', String(currentActiveTermId));
+                } else if (currentTermType) {
+                    params.set('term_type', currentTermType);
+                }
+                return `${basePath}?${params.toString()}`;
+            }
+
             schoolFilter.addEventListener('change', () => { 
-                semFilter.innerHTML = '<option value="">-- Select School --</option>';
-                classFilter.innerHTML = '<option value="">-- Select Sem --</option>';
+                semFilter.innerHTML = '<option value="">All semesters</option>';
+                classFilter.innerHTML = '<option value="">Select semester</option>';
+                classFilter.disabled = true;
                 if (schoolFilter.value) {
-                    fetchAndPopulate(`get_semesters.php?school=${schoolFilter.value}`, semFilter, null, 'All Semesters');
+                    fetchAndPopulate(buildTermScopedUrl('get_semesters.php', { school: schoolFilter.value }), semFilter, null, 'All Semesters');
                 }
             });
             semFilter.addEventListener('change', () => { 
-                classFilter.innerHTML = '<option value="">-- Select Sem --</option>';
+                classFilter.innerHTML = '<option value="">Select semester</option>';
+                classFilter.disabled = true;
                 if (schoolFilter.value && semFilter.value) {
-                    fetchAndPopulate(`get_classes.php?school=${schoolFilter.value}&semester=${semFilter.value}`, classFilter, null, 'All Classes');
+                    fetchAndPopulate(buildTermScopedUrl('get_classes.php', { school: schoolFilter.value, semester: semFilter.value }), classFilter, null, 'All Classes');
+                    classFilter.disabled = false;
                 }
             });
             
             // Initial population on page load
             if (currentSchool) {
-                fetchAndPopulate(`get_semesters.php?school=${currentSchool}`, semFilter, currentSem, 'All Semesters');
+                fetchAndPopulate(buildTermScopedUrl('get_semesters.php', { school: currentSchool }), semFilter, currentSem, 'All Semesters');
             }
             if (currentSchool && currentSem) {
-                 fetchAndPopulate(`get_classes.php?school=${currentSchool}&semester=${currentSem}`, classFilter, currentClass, 'All Classes');
+                 fetchAndPopulate(buildTermScopedUrl('get_classes.php', { school: currentSchool, semester: currentSem }), classFilter, currentClass, 'All Classes');
+                 classFilter.disabled = false;
+            } else {
+                classFilter.innerHTML = '<option value="">Select semester</option>';
+                classFilter.disabled = true;
+            }
+
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    window.location.href = 'program_dashboard.php';
+                });
+            }
+
+            if (exportBtn && filterForm) {
+                exportBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const params = new URLSearchParams(new FormData(filterForm));
+                    params.append('export', 'csv');
+                    window.location.href = `program_dashboard.php?${params.toString()}`;
+                });
             }
 
             document.querySelectorAll('.clickable-card[data-link]').forEach(card => {

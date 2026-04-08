@@ -115,12 +115,12 @@ body.dark-mode {
     align-items: center;
     background: #fff;
     padding: 12px 18px;
-    min-height: 72px;
+    min-height: 84px;
     border-radius: 10px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     margin-bottom: 24px;
     position: relative;
-    overflow: hidden;
+    overflow: visible;
     padding-right: 210px;
 }
 .header::after {
@@ -152,6 +152,17 @@ body.dark-mode {
     font-weight: 600;
 }
 
+.header > div {
+    min-width: 0;
+}
+
+.header h1,
+.header h2,
+.header h3 {
+    margin: 0;
+    line-height: 1.2;
+}
+
 .theme-toggle {
     background: #A6192E;
     color: #fff;
@@ -180,6 +191,13 @@ body.dark-mode {
     width: 100%;
     max-width: 1200px;
     margin: 0 auto;
+}
+
+.dashboard .main-content > .container {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
 }
 
 form {
@@ -388,7 +406,7 @@ body.dark-mode .dashboard .main-content .footer-bottom {
 }
 
 .header p {
-    margin-top: 4px;
+    margin: 6px 0 0;
     color: #63666A;
     font-size: 0.9rem;
 }
@@ -535,6 +553,13 @@ body.program-chair {
 
 body.program-chair .main-content {
     padding: 14px 20px 0;
+}
+
+body.program-chair .main-content > .container {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
 }
 
 body.program-chair .container {
@@ -749,6 +774,13 @@ body.teacher-role .sidebar a i {
 body.teacher-role .main-content {
     padding: 12px 16px 0;
     max-width: calc(100vw - var(--sidebar-width));
+}
+
+body.teacher-role .main-content > .container {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
 }
 
 body.teacher-role .header {

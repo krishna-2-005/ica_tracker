@@ -915,6 +915,9 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv_summary' && !empty($studen
             <a href="view_reports.php" class="active"><i class="fas fa-file-alt"></i> <span>View Reports</span></a>
             <a href="timetable.php"><i class="fas fa-calendar-alt"></i> <span>Timetable</span></a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+            <?php if (($_SESSION['user_role'] ?? '') === 'program_chair'): ?>
+                <a href="login_as.php?role=program_chair"><i class="fas fa-exchange-alt"></i> <span>Switch to Program Chair</span></a>
+            <?php endif; ?>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">

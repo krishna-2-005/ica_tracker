@@ -1255,7 +1255,8 @@ if ($classId) {
 	$ttSql .= " ORDER BY uploaded_at DESC LIMIT 3";
 	if ($stmtTimetable = mysqli_prepare($conn, $ttSql)) {
 		if ($hasTimetableSectionColumn) {
-			mysqli_stmt_bind_param($stmtTimetable, 'ii', $classId, $sectionId ?? 0);
+			$sectionIdParam = $sectionId ?? 0;
+			mysqli_stmt_bind_param($stmtTimetable, 'ii', $classId, $sectionIdParam);
 		} else {
 			mysqli_stmt_bind_param($stmtTimetable, 'i', $classId);
 		}

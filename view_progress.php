@@ -187,6 +187,7 @@ $extraPracticalExpr = $hasExtraPracticalColumn ? 'COALESCE(sp.extra_practical_ho
 $subjectMetrics = [];
 if ($classId > 0) {
     $subjectPlanSql = "SELECT s.subject_name,
+            COALESCE(s.total_planned_hours, 0) AS total_planned_hours,
             COALESCE(sd.theory_hours, 0) AS theory_hours,
             COALESCE(sd.practical_hours, 0) AS practical_hours,
             {$tutorialSelectExpr} AS tutorial_hours
@@ -203,7 +204,7 @@ if ($classId > 0) {
         $subjectPlanSql .= " AND (tsa.section_id IS NULL OR tsa.section_id = 0 OR tsa.section_id = " . (int)$sectionId . ")";
     }
 
-    $subjectPlanSql .= " GROUP BY s.id, s.subject_name, sd.theory_hours, sd.practical_hours";
+    $subjectPlanSql .= " GROUP BY s.id, s.subject_name, s.total_planned_hours, sd.theory_hours, sd.practical_hours";
 
     $subjectPlanResult = mysqli_query($conn, $subjectPlanSql);
     if ($subjectPlanResult) {
@@ -213,11 +214,21 @@ if ($classId > 0) {
                 continue;
             }
             $subjectKey = strtolower($subjectNameRaw);
+
+            $theoryPlan = max(0.0, (float)($planRow['theory_hours'] ?? 0));
+            $practicalPlan = max(0.0, (float)($planRow['practical_hours'] ?? 0));
+            $tutorialPlan = max(0.0, (float)($planRow['tutorial_hours'] ?? 0));
+            $totalPlan = max(0.0, (float)($planRow['total_planned_hours'] ?? 0));
+            if (($theoryPlan + $practicalPlan + $tutorialPlan) <= 0.0 && $totalPlan > 0.0) {
+                // Fallback when component split is not configured in subject_details.
+                $theoryPlan = $totalPlan;
+            }
+
             $subjectMetrics[$subjectKey] = [
                 'subject_name' => $subjectNameRaw,
-                'theory_plan' => (float)($planRow['theory_hours'] ?? 0),
-                'practical_plan' => (float)($planRow['practical_hours'] ?? 0),
-                'tutorial_plan' => (float)($planRow['tutorial_hours'] ?? 0),
+                'theory_plan' => $theoryPlan,
+                'practical_plan' => $practicalPlan,
+                'tutorial_plan' => $tutorialPlan,
                 'theory_actual' => 0.0,
                 'practical_actual' => 0.0,
                 'tutorial_actual' => 0.0,
@@ -267,6 +278,7 @@ if ($classId > 0) {
 
     $progressSql = "SELECT
             s.subject_name,
+            COALESCE(s.total_planned_hours, 0) AS total_planned_hours,
             sp.topic,
             sp.timeline,
             sp.modules_completed,
@@ -325,11 +337,19 @@ if ($classId > 0) {
             }
             $subjectKey = strtolower($subjectNameRaw);
             if (!isset($subjectMetrics[$subjectKey])) {
+                $theoryPlan = max(0.0, (float)($row['theory_hours'] ?? 0));
+                $practicalPlan = max(0.0, (float)($row['practical_hours'] ?? 0));
+                $tutorialPlan = max(0.0, (float)($row['tutorial_hours'] ?? 0));
+                $totalPlan = max(0.0, (float)($row['total_planned_hours'] ?? 0));
+                if (($theoryPlan + $practicalPlan + $tutorialPlan) <= 0.0 && $totalPlan > 0.0) {
+                    $theoryPlan = $totalPlan;
+                }
+
                 $subjectMetrics[$subjectKey] = [
                     'subject_name' => $subjectNameRaw,
-                    'theory_plan' => (float)($row['theory_hours'] ?? 0),
-                    'practical_plan' => (float)($row['practical_hours'] ?? 0),
-                    'tutorial_plan' => (float)($row['tutorial_hours'] ?? 0),
+                    'theory_plan' => $theoryPlan,
+                    'practical_plan' => $practicalPlan,
+                    'tutorial_plan' => $tutorialPlan,
                     'theory_actual' => 0.0,
                     'practical_actual' => 0.0,
                     'tutorial_actual' => 0.0,
@@ -343,6 +363,22 @@ if ($classId > 0) {
 
             $teacherNameRaw = isset($row['teacher_name']) ? trim((string)$row['teacher_name']) : '';
             $teacherNameDisplay = $teacherNameRaw !== '' ? format_person_display($teacherNameRaw) : 'NOT ASSIGNED';
+
+            $existingPlanTotal =
+                max(0.0, (float)($subjectMetrics[$subjectKey]['theory_plan'] ?? 0)) +
+                max(0.0, (float)($subjectMetrics[$subjectKey]['practical_plan'] ?? 0)) +
+                max(0.0, (float)($subjectMetrics[$subjectKey]['tutorial_plan'] ?? 0));
+            if ($existingPlanTotal <= 0.0) {
+                $fallbackTotalPlan = max(0.0, (float)($row['total_planned_hours'] ?? 0));
+                if ($fallbackTotalPlan <= 0.0) {
+                    $fallbackTotalPlan = max(0.0, (float)($row['planned_hours'] ?? 0));
+                }
+                if ($fallbackTotalPlan > 0.0) {
+                    $subjectMetrics[$subjectKey]['theory_plan'] = $fallbackTotalPlan;
+                    $subjectMetrics[$subjectKey]['practical_plan'] = 0.0;
+                    $subjectMetrics[$subjectKey]['tutorial_plan'] = 0.0;
+                }
+            }
 
             $plannedTheory = max(0.0, (float)($subjectMetrics[$subjectKey]['theory_plan'] ?? 0));
             $plannedPractical = max(0.0, (float)($subjectMetrics[$subjectKey]['practical_plan'] ?? 0));
@@ -400,15 +436,12 @@ foreach ($subjectMetrics as $metric) {
         'topic' => $metric['topic'],
         'timeline' => $metric['timeline'],
         'modules_completed' => null,
-<<<<<<< HEAD
-=======
         'theory_plan' => (float)$metric['theory_plan'],
         'theory_actual' => (float)$metric['theory_actual'],
         'practical_plan' => (float)$metric['practical_plan'],
         'practical_actual' => (float)$metric['practical_actual'],
         'tutorial_plan' => (float)$metric['tutorial_plan'],
         'tutorial_actual' => (float)$metric['tutorial_actual'],
->>>>>>> 9cfec46 (Modified files)
         'planned_hours' => $metric['theory_plan'] + $metric['practical_plan'] + $metric['tutorial_plan'],
         'actual_hours' => $metric['theory_actual'] + $metric['practical_actual'] + $metric['tutorial_actual'],
         'completion_percentage' => $metric['completion_percentage'],
@@ -670,12 +703,9 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
 <th class="text-left">Faculty</th>
 <th class="text-left">Topic</th>
 <th class="text-left">Timeline</th>
-<<<<<<< HEAD
-=======
 <th>Theory (Done/Plan)</th>
 <th>Practical (Done/Plan)</th>
 <th>Tutorial (Done/Plan)</th>
->>>>>>> 9cfec46 (Modified files)
 <th>Planned Hours</th>
 <th>Actual Hours</th>
 <th>Completion %</th>
@@ -689,12 +719,9 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
 <td class="text-left"><?php echo htmlspecialchars($record['teacher_name_display'] ?? 'NOT ASSIGNED'); ?></td>
 <td class="text-left"><?php echo htmlspecialchars($record['topic'] ?? 'N/A'); ?></td>
 <td class="text-left"><?php echo htmlspecialchars($record['timeline'] ?? 'N/A'); ?></td>
-<<<<<<< HEAD
-=======
 <td><?php echo number_format((float)($record['theory_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['theory_plan'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['practical_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['practical_plan'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['tutorial_actual'] ?? 0), 1); ?> / <?php echo number_format((float)($record['tutorial_plan'] ?? 0), 1); ?></td>
->>>>>>> 9cfec46 (Modified files)
 <td><?php echo number_format((float)($record['planned_hours'] ?? 0), 1); ?></td>
 <td><?php echo number_format((float)($record['actual_hours'] ?? 0), 1); ?></td>
 <td><?php echo round((float)($record['completion_percentage'] ?? 0), 1); ?>%</td>

@@ -13,9 +13,31 @@ if (!$param) {
 
 $school = mysqli_real_escape_string($conn, $_GET['school']);
 
-$query = "SELECT DISTINCT semester FROM classes WHERE school = ? ORDER BY semester ASC";
+$active_term_id = isset($_GET['active_term_id']) ? (int)$_GET['active_term_id'] : 0;
+$term_type = isset($_GET['term_type']) ? strtolower(trim((string)$_GET['term_type'])) : '';
+$parity_mod = null;
+if ($term_type === 'even') {
+    $parity_mod = 0;
+} elseif ($term_type === 'odd') {
+    $parity_mod = 1;
+}
+
+$query = "SELECT DISTINCT semester FROM classes WHERE school = ?";
+if ($active_term_id > 0) {
+    $query .= " AND academic_term_id = ?";
+} elseif ($parity_mod !== null) {
+    $query .= " AND CAST(semester AS UNSIGNED) % 2 = ?";
+}
+$query .= " ORDER BY CAST(semester AS UNSIGNED) ASC";
+
 $stmt = mysqli_prepare($conn, $query);
-mysqli_stmt_bind_param($stmt, "s", $school);
+if ($active_term_id > 0) {
+    mysqli_stmt_bind_param($stmt, "si", $school, $active_term_id);
+} elseif ($parity_mod !== null) {
+    mysqli_stmt_bind_param($stmt, "si", $school, $parity_mod);
+} else {
+    mysqli_stmt_bind_param($stmt, "s", $school);
+}
 mysqli_stmt_execute($stmt);
 $result = mysqli_stmt_get_result($stmt);
 

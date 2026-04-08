@@ -11,6 +11,17 @@ if (!empty($_SESSION['force_password_change'])) {
     exit;
 }
 
+$quickRole = isset($_GET['role']) ? trim((string)$_GET['role']) : '';
+if ($quickRole === 'teacher' || $quickRole === 'program_chair') {
+    $_SESSION['role'] = $quickRole;
+    if ($quickRole === 'teacher') {
+        header('Location: teacher_dashboard.php');
+    } else {
+        header('Location: program_dashboard.php');
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $choice = $_POST['role_choice'] ?? '';
     if ($choice === 'teacher') {

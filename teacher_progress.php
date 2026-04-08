@@ -1238,6 +1238,7 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
             <a href="send_alerts.php"><i class="fas fa-bell"></i> <span>Alerts</span></a>
             <a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+            <a href="login_as.php?role=teacher"><i class="fas fa-exchange-alt"></i> <span>Switch to Teacher</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">

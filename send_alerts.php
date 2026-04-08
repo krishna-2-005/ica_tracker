@@ -147,6 +147,7 @@ $programChairNameDisplay = $programChairNameRaw !== '' ? format_person_display($
             <a href="send_alerts.php" class="active"><i class="fas fa-bell"></i> Alerts</a>
             <a href="settings.php"><i class="fas fa-cog"></i> Settings</a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> Edit Profile</a>
+            <a href="login_as.php?role=teacher"><i class="fas fa-exchange-alt"></i> Switch to Teacher</a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
         </div>
 

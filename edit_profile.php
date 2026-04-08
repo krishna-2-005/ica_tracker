@@ -244,6 +244,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
                 <a href="view_reports.php"><i class="fas fa-file-alt"></i> <span>View Reports</span></a>
                 <a href="timetable.php"><i class="fas fa-calendar-alt"></i> <span>Timetable</span></a>
                 <a href="edit_profile.php" class="active"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+                <?php if (($_SESSION['user_role'] ?? '') === 'program_chair'): ?>
+                    <a href="login_as.php?role=program_chair"><i class="fas fa-exchange-alt"></i> <span>Switch to Program Chair</span></a>
+                <?php endif; ?>
                 <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
             <?php elseif ($role === 'program_chair'): ?>
                 <a href="program_dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a>
@@ -254,6 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
                 <a href="send_alerts.php"><i class="fas fa-bell"></i> <span>Alerts</span></a>
                 <a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a>
                 <a href="edit_profile.php" class="active"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+                <a href="login_as.php?role=teacher"><i class="fas fa-exchange-alt"></i> <span>Switch to Teacher</span></a>
                 <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
             <?php else: ?>
                 <a href="student_dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a>

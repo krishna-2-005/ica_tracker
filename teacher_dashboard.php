@@ -132,6 +132,14 @@ if ($termStartDate && $termEndDate) {
 
 // --- START: FILTER HANDLING ---
 $selected_class = isset($_GET['class_id']) ? (int)$_GET['class_id'] : 0;
+$selected_class_key = isset($_GET['class_filter']) ? trim((string)$_GET['class_filter']) : '';
+if ($selected_class_key === '' && $selected_class > 0) {
+    $selected_class_key = $selected_class . ':0';
+}
+$selected_class_key_filter_sql = '';
+if ($selected_class_key !== '' && preg_match('/^\d+:\d+$/', $selected_class_key) === 1) {
+    $selected_class_key_filter_sql = " AND CONCAT(c.id, ':', COALESCE(tsa.section_id, 0)) = '" . mysqli_real_escape_string($conn, $selected_class_key) . "'";
+}
 
 // Fetch up to 5 pending alerts for quick display
 $alerts_query = "SELECT id, message, created_at FROM alerts WHERE teacher_id = ? AND status = 'pending'";
@@ -177,11 +185,13 @@ if ($stmt_pending_alerts_count) {
 
 // Fetch classes for the filter dropdown
 $filter_classes = [];
-$filter_classes_query = "SELECT c.id,
+$filter_classes_query = "SELECT DISTINCT
+        c.id,
         c.class_name,
         c.semester,
         c.school,
-        COALESCE(GROUP_CONCAT(DISTINCT sec.section_name ORDER BY sec.section_name SEPARATOR '/'), '') AS divisions
+        COALESCE(tsa.section_id, 0) AS section_id,
+        COALESCE(sec.section_name, '') AS section_name
     FROM classes c
     JOIN teacher_subject_assignments tsa ON c.id = tsa.class_id
     LEFT JOIN sections sec ON sec.id = tsa.section_id
@@ -189,7 +199,7 @@ $filter_classes_query = "SELECT c.id,
 if ($activeTermId > 0) {
     $filter_classes_query .= " AND c.academic_term_id = ?";
 }
-$filter_classes_query .= " GROUP BY c.id, c.class_name, c.semester, c.school ORDER BY c.class_name";
+$filter_classes_query .= " ORDER BY c.class_name, section_name";
 $stmt_filter_classes = mysqli_prepare($conn, $filter_classes_query);
 if ($stmt_filter_classes) {
     if ($activeTermId > 0) {
@@ -203,12 +213,15 @@ if ($stmt_filter_classes) {
         while ($row = mysqli_fetch_assoc($filter_classes_result)) {
             $classLabel = format_class_label(
                 $row['class_name'] ?? '',
-                $row['divisions'] ?? '',
+                $row['section_name'] ?? '',
                 $row['semester'] ?? '',
                 $row['school'] ?? ''
             );
+            $classKey = (int)$row['id'] . ':' . (int)($row['section_id'] ?? 0);
             $filter_classes[] = [
                 'id' => (int)$row['id'],
+                'section_id' => (int)($row['section_id'] ?? 0),
+                'key' => $classKey,
                 'class_name' => $classLabel !== '' ? $classLabel : format_subject_display($row['class_name'] ?? '')
             ];
         }
@@ -218,19 +231,19 @@ if ($stmt_filter_classes) {
 }
 
 if (empty($filter_classes)) {
-    $fallback_classes_query = "SELECT c.id,
+    $fallback_classes_query = "SELECT DISTINCT c.id,
             c.class_name,
             c.semester,
             c.school,
-            COALESCE(GROUP_CONCAT(DISTINCT sec.section_name ORDER BY sec.section_name SEPARATOR '/'), '') AS divisions
+            0 AS section_id,
+            '' AS section_name
         FROM classes c
         JOIN teacher_classes tc ON c.id = tc.class_id
-        LEFT JOIN sections sec ON sec.class_id = c.id
         WHERE tc.teacher_id = ?";
     if ($activeTermId > 0) {
         $fallback_classes_query .= " AND c.academic_term_id = ?";
     }
-    $fallback_classes_query .= " GROUP BY c.id, c.class_name, c.semester, c.school ORDER BY c.class_name";
+    $fallback_classes_query .= " ORDER BY c.class_name";
     $stmt_fallback_classes = mysqli_prepare($conn, $fallback_classes_query);
     if ($stmt_fallback_classes) {
         if ($activeTermId > 0) {
@@ -244,12 +257,15 @@ if (empty($filter_classes)) {
             while ($row = mysqli_fetch_assoc($fallback_classes_result)) {
                 $fallbackLabel = format_class_label(
                     $row['class_name'] ?? '',
-                    $row['divisions'] ?? '',
+                    $row['section_name'] ?? '',
                     $row['semester'] ?? '',
                     $row['school'] ?? ''
                 );
+                $fallbackKey = (int)$row['id'] . ':0';
                 $filter_classes[] = [
                     'id' => (int)$row['id'],
+                    'section_id' => 0,
+                    'key' => $fallbackKey,
                     'class_name' => $fallbackLabel !== '' ? $fallbackLabel : format_subject_display($row['class_name'] ?? '')
                 ];
             }
@@ -569,27 +585,17 @@ $syllabus_chart_query = "SELECT
                         LEFT JOIN sections sec ON sec.id = tsa.section_id
                         LEFT JOIN syllabus_progress sp ON sp.subject = s.subject_name AND sp.teacher_id = tsa.teacher_id AND sp.class_id = c.id AND sp.section_id = COALESCE(tsa.section_id, 0)
                         WHERE tsa.teacher_id = ?";
-if ($selected_class > 0) {
-    $syllabus_chart_query .= " AND c.id = ?";
-    }
-    if ($termStartBound && $termEndBound) {
-        $syllabus_chart_query .= " AND sp.updated_at BETWEEN ? AND ?";
+$syllabus_chart_query .= $selected_class_key_filter_sql;
+if ($termStartBound && $termEndBound) {
+    $syllabus_chart_query .= " AND sp.updated_at BETWEEN ? AND ?";
 }
 $syllabus_chart_query .= " GROUP BY s.id, s.subject_name, c.id, c.class_name, c.semester, c.school, section_name ORDER BY s.subject_name, c.class_name";
 
 $stmt_syllabus_chart = mysqli_prepare($conn, $syllabus_chart_query);
-if ($selected_class > 0) {
-    if ($termStartBound && $termEndBound) {
-        mysqli_stmt_bind_param($stmt_syllabus_chart, "iiss", $teacher_id, $selected_class, $termStartBound, $termEndBound);
-    } else {
-        mysqli_stmt_bind_param($stmt_syllabus_chart, "ii", $teacher_id, $selected_class);
-    }
+if ($termStartBound && $termEndBound) {
+    mysqli_stmt_bind_param($stmt_syllabus_chart, "iss", $teacher_id, $termStartBound, $termEndBound);
 } else {
-    if ($termStartBound && $termEndBound) {
-        mysqli_stmt_bind_param($stmt_syllabus_chart, "iss", $teacher_id, $termStartBound, $termEndBound);
-    } else {
-        mysqli_stmt_bind_param($stmt_syllabus_chart, "i", $teacher_id);
-    }
+    mysqli_stmt_bind_param($stmt_syllabus_chart, "i", $teacher_id);
 }
 mysqli_stmt_execute($stmt_syllabus_chart);
 $syllabus_chart_result = mysqli_stmt_get_result($stmt_syllabus_chart);
@@ -622,32 +628,25 @@ $mid_marks_query = "SELECT s.subject_name,
                         AVG(CASE WHEN ic.component_name LIKE '%Mid Exam%' THEN (ism.marks / ic.marks_per_instance) * 100 ELSE NULL END) as mid_avg
                     FROM ica_student_marks ism
                     JOIN ica_components ic ON ism.component_id = ic.id
-                    JOIN subjects s ON ic.subject_id = s.id";
-if ($selected_class > 0) {
-    $mid_marks_query .= " JOIN classes c ON s.semester = c.semester AND s.school = c.school";
-}
+                    JOIN subjects s ON ic.subject_id = s.id
+                    JOIN students st ON st.id = ism.student_id
+                    JOIN teacher_subject_assignments tsa ON tsa.teacher_id = ism.teacher_id
+                        AND tsa.subject_id = s.id
+                        AND tsa.class_id = st.class_id
+                        AND (COALESCE(tsa.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa.section_id, 0))
+                    JOIN classes c ON c.id = tsa.class_id";
 $mid_marks_query .= " WHERE ism.teacher_id = ? AND ic.marks_per_instance > 0 AND ic.component_name LIKE '%Mid Exam%'";
+$mid_marks_query .= $selected_class_key_filter_sql;
 if ($termStartBound && $termEndBound) {
     $mid_marks_query .= " AND ism.updated_at BETWEEN ? AND ?";
-}
-if ($selected_class > 0) {
-    $mid_marks_query .= " AND c.id = ?";
 }
 $mid_marks_query .= " GROUP BY s.id, s.subject_name";
 
 $stmt_mid_marks = mysqli_prepare($conn, $mid_marks_query);
-if ($selected_class > 0) {
-    if ($termStartBound && $termEndBound) {
-        mysqli_stmt_bind_param($stmt_mid_marks, "iiss", $teacher_id, $termStartBound, $termEndBound, $selected_class);
-    } else {
-        mysqli_stmt_bind_param($stmt_mid_marks, "ii", $teacher_id, $selected_class);
-    }
+if ($termStartBound && $termEndBound) {
+    mysqli_stmt_bind_param($stmt_mid_marks, "iss", $teacher_id, $termStartBound, $termEndBound);
 } else {
-    if ($termStartBound && $termEndBound) {
-        mysqli_stmt_bind_param($stmt_mid_marks, "iss", $teacher_id, $termStartBound, $termEndBound);
-    } else {
-        mysqli_stmt_bind_param($stmt_mid_marks, "i", $teacher_id);
-    }
+    mysqli_stmt_bind_param($stmt_mid_marks, "i", $teacher_id);
 }
 mysqli_stmt_execute($stmt_mid_marks);
 $mid_marks_result = mysqli_stmt_get_result($stmt_mid_marks);
@@ -681,6 +680,12 @@ mysqli_stmt_close($stmt_mid_marks);
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 12px;
             margin-bottom: 16px;
+        }
+        body.teacher-role .main-content > .container {
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 0;
         }
         .overview-card {
             background-color: #fff;
@@ -743,20 +748,21 @@ mysqli_stmt_close($stmt_mid_marks);
         .progress-status.status-negative { background:#fff5f5; color:#b10024; border:1px solid #f3d4da; }
         .progress-status.status-neutral { background:#f0f4f7; color:#2c3e50; border:1px solid #d6e0ea; }
         
-<<<<<<< HEAD
-        #subject-details-panel { display: none; margin-top: 14px; padding: 14px; border-radius: 10px; background-color: #f8f9fa; }
-        .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 10px; }
+    #subject-details-panel { display: none; margin-top: 18px; padding: 14px; border-radius: 10px; background-color: #f8f9fa; }
+    .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 10px; }
         .subject-meta { margin-bottom: 6px; font-size: 0.9rem; color: #444; line-height: 1.35; }
-        #subject-details-panel h5 { font-size: 1rem; margin: 10px 0 8px; }
-        #subject-details-panel p { margin-bottom: 8px; }
-=======
-        #subject-details-panel { display: none; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background-color: #f8f9fa; }
-        .details-header { font-size: 1.18rem; font-weight: 600; color: #A6192E; margin-bottom: 6px; }
-        .subject-meta { margin: 0 0 4px; font-size: 0.9rem; color: #444; line-height: 1.25; }
-        #subject-details-panel h5 { font-size: 1rem; margin: 8px 0 6px; }
-        #subject-details-panel p { margin-bottom: 4px; }
->>>>>>> 9cfec46 (Modified files)
-        .details-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .subject-meta-inline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            white-space: nowrap;
+            padding-bottom: 2px;
+        }
+    #subject-details-panel h5 { font-size: 1rem; margin: 10px 0 8px; }
+    #subject-details-panel p { margin-bottom: 8px; }
+        .details-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; }
         #subject-details-panel .details-actions .btn {
             display: inline-flex;
             align-items: center;
@@ -767,6 +773,7 @@ mysqli_stmt_close($stmt_mid_marks);
             background: #A6192E;
             color: #fff;
             text-decoration: none;
+            white-space: nowrap;
             transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
         }
         #subject-details-panel .details-actions .btn:hover,
@@ -858,12 +865,35 @@ mysqli_stmt_close($stmt_mid_marks);
         .card-header select {
             padding: 6px 10px; font-size: 0.9em; border-radius: 6px; margin-bottom: 0;
         }
+        .chart-filter-form {
+            margin-left: auto;
+        }
+        .chart-filter-form .form-group {
+            justify-content: flex-end;
+        }
+        .chart-filter-form select {
+            width: auto;
+            min-width: 260px;
+            max-width: 360px;
+        }
         @media (max-width: 992px) {
             .chart-grid {
                 grid-template-columns: 1fr; /* Stack charts on smaller screens */
             }
             .subject-grid {
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+            .chart-filter-form {
+                margin-left: 0;
+                width: 100%;
+            }
+            .chart-filter-form .form-group {
+                justify-content: flex-start;
+            }
+            .chart-filter-form select {
+                width: 100%;
+                min-width: 0;
+                max-width: none;
             }
         }
         /* END: Modified styles */
@@ -882,6 +912,9 @@ mysqli_stmt_close($stmt_mid_marks);
             <a href="view_reports.php"><i class="fas fa-file-alt"></i> <span>View Reports</span></a>
             <a href="timetable.php"><i class="fas fa-calendar-alt"></i> <span>Timetable</span></a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+            <?php if (($_SESSION['user_role'] ?? '') === 'program_chair'): ?>
+                <a href="login_as.php?role=program_chair"><i class="fas fa-exchange-alt"></i> <span>Switch to Program Chair</span></a>
+            <?php endif; ?>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -977,19 +1010,6 @@ mysqli_stmt_close($stmt_mid_marks);
                     <div class="card">
                         <div class="card-header">
                             <h5>Syllabus Progress (%)</h5>
-                            <form method="GET" id="filterForm">
-                                <div class="form-group">
-                                    <label>Filter by Class:</label>
-                                    <select name="class_id" onchange="this.form.submit()">
-                                        <option value="0">All My Classes</option>
-                                        <?php foreach ($filter_classes as $class): ?>
-                                            <option value="<?php echo (int)$class['id']; ?>" <?php if ($selected_class == (int)$class['id']) echo 'selected'; ?>>
-                                                <?php echo htmlspecialchars($class['class_name']); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                            </form>
                         </div>
                         <div class="card-body">
                             <div class="chart-container">
@@ -998,7 +1018,22 @@ mysqli_stmt_close($stmt_mid_marks);
                         </div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><h5>Mid-Term Average Marks (%)</h5></div>
+                        <div class="card-header">
+                            <h5>Mid-Term Average Marks (%)</h5>
+                            <form method="GET" id="midFilterForm" class="chart-filter-form">
+                                <div class="form-group">
+                                    <label>Filter by Class/Division:</label>
+                                    <select name="class_filter" onchange="this.form.submit()">
+                                        <option value="">All My Classes</option>
+                                        <?php foreach ($filter_classes as $class): ?>
+                                            <option value="<?php echo htmlspecialchars($class['key']); ?>" <?php echo $selected_class_key === $class['key'] ? 'selected' : ''; ?>>
+                                                <?php echo htmlspecialchars($class['class_name']); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                            </form>
+                        </div>
                         <div class="card-body">
                             <div class="chart-container">
                                 <canvas id="midMarksChart"></canvas>
@@ -1156,20 +1191,20 @@ mysqli_stmt_close($stmt_mid_marks);
                 const typeLabel = subjectType === 'elective' ? 'Elective' : 'Regular';
                 let contentHTML = `<div class="details-header">Details for ${safeSubject}</div>`;
 
-                contentHTML += `<p class="subject-meta"><strong>Class:</strong> ${readableClass}</p>`;
                 const metaBits = [];
+                metaBits.push(`<strong>Class:</strong> ${readableClass}`);
                 if (school) {
-                    metaBits.push(`School: ${escapeHtml(school)}`);
+                    metaBits.push(`<strong>School:</strong> ${escapeHtml(school)}`);
                 }
                 if (semester) {
-                    metaBits.push(`Semester: ${escapeHtml(semester)}`);
+                    metaBits.push(`<strong>Semester:</strong> ${escapeHtml(semester)}`);
+                }
+                metaBits.push(`<strong>Type:</strong> ${escapeHtml(typeLabel)}`);
+                if (hoursLabel !== '') {
+                    metaBits.push(`<strong>Weekly Plan:</strong> ${escapeHtml(hoursLabel)}`);
                 }
                 if (metaBits.length) {
-                    contentHTML += `<p class="subject-meta">${metaBits.join(' • ')}</p>`;
-                }
-                contentHTML += `<p class="subject-meta"><strong>Subject Type:</strong> ${escapeHtml(typeLabel)}</p>`;
-                if (hoursLabel !== '') {
-                    contentHTML += `<p class="subject-meta"><strong>Weekly Plan:</strong> ${escapeHtml(hoursLabel)}</p>`;
+                    contentHTML += `<p class="subject-meta subject-meta-inline">${metaBits.join('<span>•</span>')}</p>`;
                 }
                 if (assignmentNote) {
                     contentHTML += `<p class="subject-meta"><strong>Note:</strong> ${escapeHtml(assignmentNote)}</p>`;

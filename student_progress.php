@@ -59,13 +59,22 @@ if (!function_exists('build_subject_short_label')) {
             return '';
         }
 
+        $electivePrefix = '';
+        // Preserve elective code prefixes like OE3/OE4 in chart labels.
+        if (preg_match('/^(OE\d+)\s*[-:]/i', $subject_name, $prefixMatch)) {
+            $electivePrefix = strtoupper($prefixMatch[1]);
+            $subject_name = trim((string)preg_replace('/^OE\d+\s*[-:]\s*/i', '', $subject_name));
+        }
+
         if (preg_match('/^([A-Za-z]{2,8})\s*[-:]/', $subject_name, $matches)) {
-            return strtoupper($matches[1]);
+            $base = strtoupper($matches[1]);
+            return $electivePrefix !== '' ? ($electivePrefix . '-' . $base) : $base;
         }
 
         $tokens = preg_split('/[\s\-_:()]+/', $subject_name, -1, PREG_SPLIT_NO_EMPTY);
         if (!$tokens) {
-            return strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $subject_name), 0, 8));
+            $fallback = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $subject_name), 0, 8));
+            return $electivePrefix !== '' ? ($electivePrefix . '-' . $fallback) : $fallback;
         }
 
         $skip = ['and', 'of', 'the', 'to', 'for', 'in', 'on', 'with'];
@@ -85,7 +94,8 @@ if (!function_exists('build_subject_short_label')) {
             }
         }
 
-        return substr($abbr, 0, 8);
+        $abbr = substr($abbr, 0, 8);
+        return $electivePrefix !== '' ? ($electivePrefix . '-' . $abbr) : $abbr;
     }
 }
 
@@ -482,6 +492,15 @@ $contextSchool = $school_filter !== '' ? $school_filter : $pc_school;
 $academicContext = resolveAcademicContext($conn, [
     'school_name' => $contextSchool
 ]);
+$activeTerm = $academicContext['active'] ?? null;
+$activeTermId = isset($activeTerm['id']) ? (int)$activeTerm['id'] : 0;
+$activeTermTypeRaw = strtolower(trim((string)($activeTerm['semester_term'] ?? '')));
+$activeTermParity = '';
+if (strpos($activeTermTypeRaw, 'even') !== false) {
+    $activeTermParity = 'even';
+} elseif (strpos($activeTermTypeRaw, 'odd') !== false) {
+    $activeTermParity = 'odd';
+}
 
 $available_schools = [];
 $schools_res = mysqli_query($conn, "SELECT school_name FROM schools ORDER BY school_name");
@@ -509,10 +528,26 @@ if ($pc_school !== '' && !in_array($pc_school, $available_schools, true)) {
 
 $semesters = [];
 if ($school_filter !== '') {
-    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ? ORDER BY CAST(semester AS UNSIGNED)";
+    $sem_sql = "SELECT DISTINCT semester FROM classes WHERE school = ?";
+    $sem_types = 's';
+    $sem_params = [$school_filter];
+    if ($activeTermId > 0) {
+        $sem_sql .= " AND academic_term_id = ?";
+        $sem_types .= 'i';
+        $sem_params[] = $activeTermId;
+    } elseif ($activeTermParity === 'even') {
+        $sem_sql .= " AND CAST(semester AS UNSIGNED) % 2 = 0";
+    } elseif ($activeTermParity === 'odd') {
+        $sem_sql .= " AND CAST(semester AS UNSIGNED) % 2 = 1";
+    }
+    $sem_sql .= " ORDER BY CAST(semester AS UNSIGNED)";
     $sem_stmt = mysqli_prepare($conn, $sem_sql);
     if ($sem_stmt) {
-        mysqli_stmt_bind_param($sem_stmt, "s", $school_filter);
+        $sem_bind_values = [$sem_stmt, $sem_types];
+        foreach ($sem_params as $key => $value) {
+            $sem_bind_values[] = &$sem_params[$key];
+        }
+        call_user_func_array('mysqli_stmt_bind_param', $sem_bind_values);
         mysqli_stmt_execute($sem_stmt);
         $sem_res = mysqli_stmt_get_result($sem_stmt);
         if ($sem_res) {
@@ -530,6 +565,15 @@ if ($school_filter !== '') {
     $class_sql = "SELECT id, class_name, semester FROM classes WHERE school = ?";
     $class_types = 's';
     $class_params = [$school_filter];
+    if ($activeTermId > 0) {
+        $class_sql .= " AND academic_term_id = ?";
+        $class_types .= 'i';
+        $class_params[] = $activeTermId;
+    } elseif ($activeTermParity === 'even') {
+        $class_sql .= " AND CAST(semester AS UNSIGNED) % 2 = 0";
+    } elseif ($activeTermParity === 'odd') {
+        $class_sql .= " AND CAST(semester AS UNSIGNED) % 2 = 1";
+    }
     if ($semester_filter !== '') {
         $class_sql .= " AND semester = ?";
         $class_types .= 's';
@@ -538,11 +582,11 @@ if ($school_filter !== '') {
     $class_sql .= " ORDER BY CAST(semester AS UNSIGNED), class_name";
     $class_stmt = mysqli_prepare($conn, $class_sql);
     if ($class_stmt) {
-        if ($class_types === 's') {
-            mysqli_stmt_bind_param($class_stmt, 's', $class_params[0]);
-        } else {
-            mysqli_stmt_bind_param($class_stmt, 'ss', $class_params[0], $class_params[1]);
+        $class_bind_values = [$class_stmt, $class_types];
+        foreach ($class_params as $key => $value) {
+            $class_bind_values[] = &$class_params[$key];
         }
+        call_user_func_array('mysqli_stmt_bind_param', $class_bind_values);
         mysqli_stmt_execute($class_stmt);
         $class_res = mysqli_stmt_get_result($class_stmt);
         if ($class_res) {
@@ -600,6 +644,16 @@ if ($filters_applied) {
 
     $types = 's';
     $params = [$school_filter];
+
+    if ($activeTermId > 0) {
+        $base_sql .= " AND c.academic_term_id = ?";
+        $types .= 'i';
+        $params[] = $activeTermId;
+    } elseif ($activeTermParity === 'even') {
+        $base_sql .= " AND CAST(c.semester AS UNSIGNED) % 2 = 0";
+    } elseif ($activeTermParity === 'odd') {
+        $base_sql .= " AND CAST(c.semester AS UNSIGNED) % 2 = 1";
+    }
 
     if ($semester_filter !== '') {
         $base_sql .= " AND c.semester = ?";
@@ -815,6 +869,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             <a href="send_alerts.php"><i class="fas fa-bell"></i> <span>Alerts</span></a>
             <a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a>
             <a href="edit_profile.php"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
+            <a href="login_as.php?role=teacher"><i class="fas fa-exchange-alt"></i> <span>Switch to Teacher</span></a>
             <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
         </div>
         <div class="main-content">
@@ -1015,6 +1070,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
             const currentClass = <?php echo json_encode($class_filter > 0 ? $class_filter : ''); ?>;
             const currentSection = <?php echo json_encode($section_filter > 0 ? $section_filter : ''); ?>;
             const currentStatus = <?php echo json_encode($status_filter); ?>;
+            const currentActiveTermId = <?php echo json_encode($activeTermId > 0 ? $activeTermId : 0); ?>;
+            const currentTermType = <?php echo json_encode($activeTermParity); ?>;
 
             if (statusFilter && currentStatus !== null) {
                 statusFilter.value = currentStatus;
@@ -1039,7 +1096,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                     return;
                 }
 
-                fetch(`get_semesters.php?school=${encodeURIComponent(school)}`)
+                fetch(buildTermScopedUrl('get_semesters.php', { school: school }))
                     .then(response => response.json())
                     .then(data => {
                         data.forEach(item => {
@@ -1071,7 +1128,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                     return;
                 }
 
-                fetch(`get_classes.php?school=${encodeURIComponent(school)}&semester=${encodeURIComponent(semester)}`)
+                fetch(buildTermScopedUrl('get_classes.php', { school: school, semester: semester }))
                     .then(response => response.json())
                     .then(data => {
                         data.forEach(item => {
@@ -1089,6 +1146,16 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
                         }
                     })
                     .catch(() => {});
+            }
+
+            function buildTermScopedUrl(basePath, extraParams = {}) {
+                const params = new URLSearchParams(extraParams);
+                if (currentActiveTermId && Number(currentActiveTermId) > 0) {
+                    params.set('active_term_id', String(currentActiveTermId));
+                } else if (currentTermType) {
+                    params.set('term_type', currentTermType);
+                }
+                return `${basePath}?${params.toString()}`;
             }
 
             function populateSections(classId, selectedSection) {
