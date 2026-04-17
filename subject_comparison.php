@@ -747,7 +747,6 @@ mysqli_close($conn);
                     <h2>Subject Comparison Insights</h2>
                     <p>Review how you compare with your class across each course.</p>
                 </div>
-                <a class="back-link" href="student_dashboard.php"><i class="fas fa-arrow-left"></i> Back to dashboard</a>
             </div>
             <div class="container">
                 <?php if (!empty($allComponents)): ?>

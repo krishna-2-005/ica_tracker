@@ -877,6 +877,9 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv_summary' && !empty($studen
         .status-tag.status-average { background: #fff7e6; color: #ef6c00; }
         .status-tag.status-good { background: #e8f5e9; color: #2e7d32; }
         .status-tag.status-absent { background: #f3e5f5; color: #6a1b9a; }
+            .teacher-reports-page .main-content .container > * + * { margin-top: 18px; }
+            .teacher-reports-page .card table { margin-bottom: 0; }
+            .teacher-reports-page .card .card-header { margin-bottom: 10px; }
         th.standing-header { text-align: center; }
         td.standing-cell { text-align: center; }
         th.signature-header,
@@ -900,7 +903,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv_summary' && !empty($studen
         }
     </style>
 </head>
-<body class="teacher-role">
+<body class="teacher-role teacher-reports-page">
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">

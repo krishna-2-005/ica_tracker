@@ -405,13 +405,7 @@ $subjectSummary = array_values($subjectSummary);
                 <?php elseif ($submissionError !== ''): ?>
                     <div class="alert alert-error" style="margin-bottom:0;"><?php echo htmlspecialchars($submissionError); ?></div>
                 <?php endif; ?>
-                <?php if ($nextDeadlineLabel): ?>
-                    <span class="tag">Next due: <?php echo htmlspecialchars($nextDeadlineLabel); ?> (<?php echo htmlspecialchars($nextDeadlineHint); ?>)</span>
-                <?php elseif ($stats['total'] === 0): ?>
-                    <span class="tag">No assignments posted yet</span>
-                <?php elseif ($stats['pending'] === 0): ?>
-                    <span class="tag">All submissions up to date</span>
-                <?php endif; ?>
+                <?php // Header tag removed to prevent overlap with NMIMS logo in compact layout. ?>
             </div>
             <div class="container">
                 <?php if ($errorMessage !== ''): ?>

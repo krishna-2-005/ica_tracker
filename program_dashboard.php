@@ -60,6 +60,16 @@ function format_hours_display($value): string {
     return rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.');
 }
 
+function metric_severity_from_count(int $count, int $mediumThreshold, int $highThreshold): string {
+    if ($count >= $highThreshold) {
+        return 'high';
+    }
+    if ($count >= $mediumThreshold) {
+        return 'medium';
+    }
+    return 'low';
+}
+
 function abbreviate_subject_name(string $name): string {
     $trimmed = trim($name);
     if ($trimmed === '') {
@@ -332,6 +342,19 @@ $students_page_link = 'student_progress.php' . ($card_link_query !== '' ? ('?' .
 $student_at_risk_link = 'student_progress.php?' . http_build_query(array_merge($card_link_params, ['status' => 'at_risk']));
 $alerts_link = 'send_alerts.php' . ($card_link_query !== '' ? ('?' . $card_link_query) : '');
 $week_link = 'manage_academic_calendar.php';
+
+$teacher_link_params = [];
+if ($school_filter_display !== '') {
+    $teacher_link_params['school'] = $school_filter_display;
+}
+if ($semester_filter !== '') {
+    $teacher_link_params['semester_filter'] = $semester_filter;
+}
+if ($class_filter > 0) {
+    $teacher_link_params['class_filter'] = $class_filter;
+}
+$teacher_progress_link = 'teacher_progress.php' . (!empty($teacher_link_params) ? ('?' . http_build_query($teacher_link_params)) : '');
+$teacher_at_risk_link = 'teacher_progress.php?' . http_build_query(array_merge($teacher_link_params, ['status_filter' => 'at_risk']));
 
 $assignment_detail_res = mysqli_query($conn, $assignment_detail_sql);
 $course_keys = [];
@@ -1115,8 +1138,11 @@ foreach ($subject_chart_meta as $subject_id => $meta) {
     $subject_chart_meta_payload[(string)$subject_id] = $meta;
 }
 
-// 5. PENDING ALERTS
+// 5. ALERTS + ACTION METRICS
 $pending_alerts_count = 0;
+$resolved_alerts_count = 0;
+$alerts_result = false;
+
 if (!empty($pc_school) && $user_school_field) {
     $alerts_count_q = "SELECT COUNT(*) AS total
         FROM alerts a
@@ -1137,31 +1163,119 @@ if (!empty($pc_school) && $user_school_field) {
         }
         mysqli_stmt_close($stmt_alert_count);
     }
+
+    if ($pending_alerts_count === 0 && $user_alt_field) {
+        $alerts_count_q_alt = "SELECT COUNT(*) AS total
+            FROM alerts a
+            JOIN users u ON a.teacher_id = u.id
+            WHERE u.{$user_alt_field} = ?
+              AND a.status = 'pending'
+              AND u.role = 'teacher'" . $alertsDateClause;
+        $stmt_alert_count_alt = mysqli_prepare($conn, $alerts_count_q_alt);
+        if ($stmt_alert_count_alt) {
+            mysqli_stmt_bind_param($stmt_alert_count_alt, "s", $pc_school);
+            mysqli_stmt_execute($stmt_alert_count_alt);
+            $alert_count_res_alt = mysqli_stmt_get_result($stmt_alert_count_alt);
+            if ($alert_count_res_alt && ($count_row_alt = mysqli_fetch_assoc($alert_count_res_alt))) {
+                $pending_alerts_count = (int)($count_row_alt['total'] ?? 0);
+            }
+            if ($alert_count_res_alt) {
+                mysqli_free_result($alert_count_res_alt);
+            }
+            mysqli_stmt_close($stmt_alert_count_alt);
+        }
+    }
+} else {
+    $pending_count_res = mysqli_query(
+        $conn,
+        "SELECT COUNT(*) AS total FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause
+    );
+    if ($pending_count_res && ($pending_count_row = mysqli_fetch_assoc($pending_count_res))) {
+        $pending_alerts_count = (int)($pending_count_row['total'] ?? 0);
+        mysqli_free_result($pending_count_res);
+    }
 }
 
-// Pending alerts: if we have a pc_school value, filter by it; otherwise show all pending alerts
+if (!empty($pc_school) && $user_school_field) {
+    $resolved_alerts_q = "SELECT COUNT(*) AS total
+        FROM alerts a
+        JOIN users u ON a.teacher_id = u.id
+        WHERE u.{$user_school_field} = ?
+          AND a.status IN ('responded', 'resolved')
+          AND u.role = 'teacher'" . $alertsDateClause;
+    $stmt_resolved_alerts = mysqli_prepare($conn, $resolved_alerts_q);
+    if ($stmt_resolved_alerts) {
+        mysqli_stmt_bind_param($stmt_resolved_alerts, "s", $pc_school);
+        mysqli_stmt_execute($stmt_resolved_alerts);
+        $resolved_alerts_res = mysqli_stmt_get_result($stmt_resolved_alerts);
+        if ($resolved_alerts_res && ($resolved_row = mysqli_fetch_assoc($resolved_alerts_res))) {
+            $resolved_alerts_count = (int)($resolved_row['total'] ?? 0);
+        }
+        if ($resolved_alerts_res) {
+            mysqli_free_result($resolved_alerts_res);
+        }
+        mysqli_stmt_close($stmt_resolved_alerts);
+    }
+
+    if ($resolved_alerts_count === 0 && $user_alt_field) {
+        $resolved_alerts_q_alt = "SELECT COUNT(*) AS total
+            FROM alerts a
+            JOIN users u ON a.teacher_id = u.id
+            WHERE u.{$user_alt_field} = ?
+              AND a.status IN ('responded', 'resolved')
+              AND u.role = 'teacher'" . $alertsDateClause;
+        $stmt_resolved_alerts_alt = mysqli_prepare($conn, $resolved_alerts_q_alt);
+        if ($stmt_resolved_alerts_alt) {
+            mysqli_stmt_bind_param($stmt_resolved_alerts_alt, "s", $pc_school);
+            mysqli_stmt_execute($stmt_resolved_alerts_alt);
+            $resolved_alerts_res_alt = mysqli_stmt_get_result($stmt_resolved_alerts_alt);
+            if ($resolved_alerts_res_alt && ($resolved_row_alt = mysqli_fetch_assoc($resolved_alerts_res_alt))) {
+                $resolved_alerts_count = (int)($resolved_row_alt['total'] ?? 0);
+            }
+            if ($resolved_alerts_res_alt) {
+                mysqli_free_result($resolved_alerts_res_alt);
+            }
+            mysqli_stmt_close($stmt_resolved_alerts_alt);
+        }
+    }
+} else {
+    $resolved_alerts_res = mysqli_query(
+        $conn,
+        "SELECT COUNT(*) AS total FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE a.status IN ('responded', 'resolved') AND u.role = 'teacher'" . $alertsDateClause
+    );
+    if ($resolved_alerts_res && ($resolved_row = mysqli_fetch_assoc($resolved_alerts_res))) {
+        $resolved_alerts_count = (int)($resolved_row['total'] ?? 0);
+        mysqli_free_result($resolved_alerts_res);
+    }
+}
+
+// Pending alerts table: if we have a pc_school value, filter by it; otherwise show all pending alerts.
 if (!empty($pc_school) && $user_school_field) {
     $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_school_field} = ? AND a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
     $stmt_alerts = mysqli_prepare($conn, $alerts_q);
-    mysqli_stmt_bind_param($stmt_alerts, "s", $pc_school);
-    mysqli_stmt_execute($stmt_alerts);
-    $alerts_result = mysqli_stmt_get_result($stmt_alerts);
-    if ($alerts_result && mysqli_num_rows($alerts_result) === 0 && $user_alt_field) {
-        mysqli_stmt_close($stmt_alerts);
-        $alerts_q_alt = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_alt_field} = ? AND a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
-        $stmt_alerts_alt = mysqli_prepare($conn, $alerts_q_alt);
-        mysqli_stmt_bind_param($stmt_alerts_alt, "s", $pc_school);
-        mysqli_stmt_execute($stmt_alerts_alt);
-        $alerts_result_alt = mysqli_stmt_get_result($stmt_alerts_alt);
-        if ($alerts_result_alt && mysqli_num_rows($alerts_result_alt) > 0) {
-            $alerts_result = $alerts_result_alt;
-            $pending_alerts_count = mysqli_num_rows($alerts_result_alt);
+    if ($stmt_alerts) {
+        mysqli_stmt_bind_param($stmt_alerts, "s", $pc_school);
+        mysqli_stmt_execute($stmt_alerts);
+        $alerts_result = mysqli_stmt_get_result($stmt_alerts);
+        if ($alerts_result && mysqli_num_rows($alerts_result) === 0 && $user_alt_field) {
+            mysqli_stmt_close($stmt_alerts);
+            $alerts_q_alt = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE u.{$user_alt_field} = ? AND a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
+            $stmt_alerts_alt = mysqli_prepare($conn, $alerts_q_alt);
+            if ($stmt_alerts_alt) {
+                mysqli_stmt_bind_param($stmt_alerts_alt, "s", $pc_school);
+                mysqli_stmt_execute($stmt_alerts_alt);
+                $alerts_result_alt = mysqli_stmt_get_result($stmt_alerts_alt);
+                if ($alerts_result_alt && mysqli_num_rows($alerts_result_alt) > 0) {
+                    $alerts_result = $alerts_result_alt;
+                    $pending_alerts_count = mysqli_num_rows($alerts_result_alt);
+                }
+                mysqli_stmt_close($stmt_alerts_alt);
+            }
+        } elseif ($alerts_result) {
+            $pending_alerts_count = mysqli_num_rows($alerts_result);
+        } else {
+            mysqli_stmt_close($stmt_alerts);
         }
-        mysqli_stmt_close($stmt_alerts_alt);
-    } elseif ($alerts_result) {
-        $pending_alerts_count = mysqli_num_rows($alerts_result);
-    } else {
-        mysqli_stmt_close($stmt_alerts);
     }
 } else {
     $alerts_q = "SELECT u.name as teacher_name, a.message, a.created_at, a.responded_at, a.status FROM alerts a JOIN users u ON a.teacher_id = u.id WHERE a.status = 'pending' AND u.role = 'teacher'" . $alertsDateClause . " ORDER BY a.created_at DESC";
@@ -1179,6 +1293,7 @@ foreach ($teacher_subject_pairs as $pair) {
     }
 }
 $teachers_monitored = count($teacher_scope_ids);
+
 $students_in_scope = 0;
 $students_status_where = '';
 if ($status_filter === 'at_risk') {
@@ -1235,36 +1350,191 @@ if ($students_in_scope_res && ($students_scope_row = mysqli_fetch_assoc($student
     mysqli_free_result($students_in_scope_res);
 }
 
+$unevaluated_students = 0;
+$unevaluated_students_q = "SELECT COUNT(*) AS total_unevaluated
+    FROM (
+        SELECT
+            st.id,
+            SUM(
+                CASE
+                    WHEN ic.marks_per_instance IS NOT NULL
+                         AND ic.marks_per_instance <> 0
+                         AND ism.marks IS NOT NULL
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS evaluated_components
+        FROM students st
+        JOIN (
+            SELECT DISTINCT class_id, section_id
+            FROM (
+                $assignment_scope_sql
+            ) scope_rows
+        ) scope ON scope.class_id = st.class_id
+               AND (scope.section_id = 0 OR COALESCE(st.section_id, 0) = scope.section_id)
+        LEFT JOIN ica_student_marks ism ON ism.student_id = st.id" . ($marksDateCondition ? " AND {$marksDateCondition}" : '') . "
+        LEFT JOIN ica_components ic ON ic.id = ism.component_id
+            AND EXISTS (
+                SELECT 1
+                FROM teacher_subject_assignments tsa_scope
+                WHERE tsa_scope.subject_id = ic.subject_id
+                  AND tsa_scope.class_id = st.class_id
+                  AND (COALESCE(tsa_scope.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa_scope.section_id, 0))
+            )
+        GROUP BY st.id
+    ) scoped_students
+    WHERE scoped_students.evaluated_components = 0";
+$unevaluated_students_res = mysqli_query($conn, $unevaluated_students_q);
+if ($unevaluated_students_res && ($unevaluated_row = mysqli_fetch_assoc($unevaluated_students_res))) {
+    $unevaluated_students = (int)($unevaluated_row['total_unevaluated'] ?? 0);
+    mysqli_free_result($unevaluated_students_res);
+}
+
+$coverage_total_students = 0;
+$coverage_evaluated_students = 0;
+$teacher_coverage_rollup = [];
+foreach ($teacher_progress_meta as $teacher_id => $subjects_meta) {
+    $teacher_total = 0;
+    $teacher_evaluated = 0;
+    foreach ($subjects_meta as $meta) {
+        $subject_total = (int)($meta['total_students'] ?? 0);
+        $subject_evaluated = (int)($meta['evaluated_students'] ?? 0);
+        $teacher_total += $subject_total;
+        $teacher_evaluated += min($subject_total, $subject_evaluated);
+        $coverage_total_students += $subject_total;
+        $coverage_evaluated_students += min($subject_total, $subject_evaluated);
+    }
+    if ($teacher_total > 0) {
+        $teacher_coverage_rollup[(int)$teacher_id] = [
+            'total' => $teacher_total,
+            'evaluated' => $teacher_evaluated,
+            'coverage_pct' => round(($teacher_evaluated / $teacher_total) * 100, 1)
+        ];
+    }
+}
+
+$evaluation_coverage_pct = $coverage_total_students > 0
+    ? round(($coverage_evaluated_students / $coverage_total_students) * 100)
+    : null;
+
+$teacher_low_coverage_count = 0;
+foreach ($teacher_coverage_rollup as $rollup) {
+    if (($rollup['coverage_pct'] ?? 0) < 50) {
+        $teacher_low_coverage_count++;
+    }
+}
+
+$avg_ica_performance = null;
+$ica_samples = [];
+foreach ($teacher_ica_data as $teacher_course_scores) {
+    foreach ($teacher_course_scores as $course_score) {
+        if (is_numeric($course_score)) {
+            $ica_samples[] = (float)$course_score;
+        }
+    }
+}
+if (!empty($ica_samples)) {
+    $avg_ica_performance = round(array_sum($ica_samples) / count($ica_samples), 1);
+}
+
 $below_threshold_courses = 0;
 $no_recent_updates = 0;
-$stale_teacher_ids = [];
 $todayTs = time();
+$teacher_latest_updates = [];
+$weak_course_risks = [];
 
 if ($teacher_performance_result) {
     mysqli_data_seek($teacher_performance_result, 0);
     while ($metrics_row = mysqli_fetch_assoc($teacher_performance_result)) {
         $completion_value = isset($metrics_row['avg_completion']) ? (float)$metrics_row['avg_completion'] : 0.0;
+        $teacher_id_metrics = isset($metrics_row['teacher_id']) ? (int)$metrics_row['teacher_id'] : 0;
+        $course_name_raw = isset($metrics_row['course_name']) ? (string)$metrics_row['course_name'] : '';
+        $course_name_display = format_subject_display($course_name_raw);
+        $class_label_raw = isset($metrics_row['class_label']) ? trim((string)$metrics_row['class_label']) : '';
+        $class_label_display = $class_label_raw !== '' ? $class_label_raw : '—';
+        $teacher_name_raw = isset($metrics_row['teacher_name']) ? trim((string)$metrics_row['teacher_name']) : '';
+        $teacher_name_display = $teacher_name_raw !== '' ? format_person_display($teacher_name_raw) : ('Teacher ' . $teacher_id_metrics);
+
         if ($completion_value + 0.0001 < $syllabus_threshold) {
             $below_threshold_courses++;
         }
 
-        $last_updated_raw = isset($metrics_row['last_updated']) ? trim((string)$metrics_row['last_updated']) : '';
-        $teacher_id_metrics = isset($metrics_row['teacher_id']) ? (int)$metrics_row['teacher_id'] : 0;
-        $is_stale = true;
-        if ($last_updated_raw !== '') {
-            $last_ts = strtotime($last_updated_raw);
-            if ($last_ts !== false) {
-                $days_since = ($todayTs - $last_ts) / 86400;
-                $is_stale = $days_since > 7;
+        $mid_avg_value = null;
+        if ($teacher_id_metrics > 0 && isset($teacher_ica_data[$teacher_id_metrics][$course_name_raw]) && is_numeric($teacher_ica_data[$teacher_id_metrics][$course_name_raw])) {
+            $mid_avg_value = (float)$teacher_ica_data[$teacher_id_metrics][$course_name_raw];
+        }
+
+        $has_syllabus_risk = $completion_value + 0.0001 < $syllabus_threshold;
+        $has_mid_risk = $mid_avg_value !== null && ($mid_avg_value + 0.0001 < $performance_threshold);
+        if ($has_syllabus_risk || $has_mid_risk) {
+            $risk_score = max(0, $syllabus_threshold - $completion_value);
+            if ($mid_avg_value !== null) {
+                $risk_score += max(0, $performance_threshold - $mid_avg_value);
+            }
+            $weak_course_risks[] = [
+                'course_name' => $course_name_display,
+                'class_label' => $class_label_display,
+                'teacher_name' => $teacher_name_display,
+                'syllabus_pct' => round($completion_value),
+                'mid_avg_pct' => $mid_avg_value !== null ? round($mid_avg_value, 1) : null,
+                'risk_score' => $risk_score
+            ];
+        }
+
+        if ($teacher_id_metrics > 0) {
+            if (!isset($teacher_latest_updates[$teacher_id_metrics])) {
+                $teacher_latest_updates[$teacher_id_metrics] = [
+                    'teacher_name' => $teacher_name_display,
+                    'last_ts' => null,
+                    'last_update_text' => 'No update logged'
+                ];
+            }
+            $last_updated_raw = isset($metrics_row['last_updated']) ? trim((string)$metrics_row['last_updated']) : '';
+            if ($last_updated_raw !== '') {
+                $last_ts = strtotime($last_updated_raw);
+                if ($last_ts !== false && ($teacher_latest_updates[$teacher_id_metrics]['last_ts'] === null || $last_ts > $teacher_latest_updates[$teacher_id_metrics]['last_ts'])) {
+                    $teacher_latest_updates[$teacher_id_metrics]['last_ts'] = $last_ts;
+                    $teacher_latest_updates[$teacher_id_metrics]['last_update_text'] = date('d M Y, h:i A', $last_ts);
+                }
             }
         }
-        if ($is_stale && $teacher_id_metrics > 0) {
-            $stale_teacher_ids[$teacher_id_metrics] = true;
-        }
     }
-    $no_recent_updates = count($stale_teacher_ids);
+
     mysqli_data_seek($teacher_performance_result, 0);
 }
+
+$stale_teacher_details = [];
+foreach ($teacher_latest_updates as $teacher_update) {
+    $days_since_update = null;
+    $is_stale = true;
+    if ($teacher_update['last_ts'] !== null) {
+        $days_since_update = (int)floor(($todayTs - (int)$teacher_update['last_ts']) / 86400);
+        $is_stale = $days_since_update > 7;
+    }
+    if ($is_stale) {
+        $stale_teacher_details[] = [
+            'teacher_name' => $teacher_update['teacher_name'],
+            'days_since' => $days_since_update,
+            'last_update_text' => $teacher_update['last_update_text']
+        ];
+    }
+}
+
+usort($stale_teacher_details, static function (array $a, array $b): int {
+    $left = $a['days_since'] ?? PHP_INT_MAX;
+    $right = $b['days_since'] ?? PHP_INT_MAX;
+    return $right <=> $left;
+});
+$no_recent_updates = count($stale_teacher_details);
+$top_pending_faculty = array_slice($stale_teacher_details, 0, 5);
+
+usort($weak_course_risks, static function (array $a, array $b): int {
+    if ($a['risk_score'] === $b['risk_score']) {
+        return $a['syllabus_pct'] <=> $b['syllabus_pct'];
+    }
+    return $b['risk_score'] <=> $a['risk_score'];
+});
+$top_risk_courses = array_slice($weak_course_risks, 0, 5);
 
 $low_mid_subjects = 0;
 foreach ($mid_perf_data as $mid_row) {
@@ -1276,20 +1546,204 @@ foreach ($mid_perf_data as $mid_row) {
     }
 }
 
-$dashboard_insights = [];
+$student_risk_threshold = 50;
+$top_risk_students = [];
+$at_risk_students_q = "SELECT
+        st.id AS student_id,
+        st.name AS student_name,
+        st.roll_number,
+        st.sap_id,
+        cls.class_name,
+        COALESCE(sec.section_name, '') AS section_name,
+        cls.semester,
+        cls.school,
+        AVG(
+            CASE
+                WHEN ic.marks_per_instance IS NOT NULL
+                     AND ic.marks_per_instance <> 0
+                     AND ism.marks IS NOT NULL
+                THEN (ism.marks / ic.marks_per_instance) * 100
+                ELSE NULL
+            END
+        ) AS avg_pct,
+        SUM(
+            CASE
+                WHEN ic.marks_per_instance IS NOT NULL
+                     AND ic.marks_per_instance <> 0
+                     AND ism.marks IS NOT NULL
+                THEN 1
+                ELSE 0
+            END
+        ) AS evaluated_components
+    FROM students st
+    JOIN (
+        SELECT DISTINCT class_id, section_id
+        FROM (
+            $assignment_scope_sql
+        ) scope_rows
+    ) scope ON scope.class_id = st.class_id
+           AND (scope.section_id = 0 OR COALESCE(st.section_id, 0) = scope.section_id)
+    LEFT JOIN classes cls ON cls.id = st.class_id
+    LEFT JOIN sections sec ON sec.id = st.section_id
+    LEFT JOIN ica_student_marks ism ON ism.student_id = st.id" . ($marksDateCondition ? " AND {$marksDateCondition}" : '') . "
+    LEFT JOIN ica_components ic ON ic.id = ism.component_id
+        AND EXISTS (
+            SELECT 1
+            FROM teacher_subject_assignments tsa_scope
+            WHERE tsa_scope.subject_id = ic.subject_id
+              AND tsa_scope.class_id = st.class_id
+              AND (COALESCE(tsa_scope.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa_scope.section_id, 0))
+        )
+    GROUP BY st.id, st.name, st.roll_number, st.sap_id, cls.class_name, sec.section_name, cls.semester, cls.school
+    HAVING evaluated_components > 0 AND avg_pct < " . (int)$student_risk_threshold . "
+    ORDER BY avg_pct ASC, evaluated_components DESC
+    LIMIT 5";
+$at_risk_students_res = mysqli_query($conn, $at_risk_students_q);
+if ($at_risk_students_res) {
+    while ($risk_student_row = mysqli_fetch_assoc($at_risk_students_res)) {
+        $student_name_raw = isset($risk_student_row['student_name']) ? trim((string)$risk_student_row['student_name']) : '';
+        $student_name_display = $student_name_raw !== '' ? format_person_display($student_name_raw) : 'Student';
+        $student_identifier = isset($risk_student_row['roll_number']) ? trim((string)$risk_student_row['roll_number']) : '';
+        if ($student_identifier === '' && isset($risk_student_row['sap_id'])) {
+            $student_identifier = trim((string)$risk_student_row['sap_id']);
+        }
+        if ($student_identifier === '') {
+            $student_identifier = 'ID ' . (int)($risk_student_row['student_id'] ?? 0);
+        }
+
+        $student_class_label = format_class_label(
+            (string)($risk_student_row['class_name'] ?? ''),
+            (string)($risk_student_row['section_name'] ?? ''),
+            (string)($risk_student_row['semester'] ?? ''),
+            (string)($risk_student_row['school'] ?? '')
+        );
+        if ($student_class_label === '') {
+            $student_class_label = '—';
+        }
+
+        $top_risk_students[] = [
+            'student_name' => $student_name_display,
+            'student_identifier' => $student_identifier,
+            'class_label' => $student_class_label,
+            'avg_pct' => round((float)($risk_student_row['avg_pct'] ?? 0), 1)
+        ];
+    }
+    mysqli_free_result($at_risk_students_res);
+}
+
+$action_center_items = [];
 if ($below_threshold_courses > 0) {
-    $dashboard_insights[] = $below_threshold_courses . ' mapped course allocations are below the syllabus threshold of ' . (int)round($syllabus_threshold) . '%.';
+    $action_center_items[] = [
+        'title' => 'Courses behind syllabus target',
+        'count' => $below_threshold_courses,
+        'severity' => metric_severity_from_count($below_threshold_courses, 3, 8),
+        'detail' => 'Coverage is below ' . (int)round($syllabus_threshold) . '% for mapped course allocations.',
+        'primary_label' => 'View Courses',
+        'primary_link' => $course_progress_link,
+        'secondary_label' => 'Send Reminder',
+        'secondary_link' => $alerts_link
+    ];
 }
 if ($low_mid_subjects > 0) {
-    $dashboard_insights[] = $low_mid_subjects . ' subjects have Mid performance below ' . (int)round($performance_threshold) . '%.';
+    $action_center_items[] = [
+        'title' => 'Weak mid-exam outcomes',
+        'count' => $low_mid_subjects,
+        'severity' => metric_severity_from_count($low_mid_subjects, 3, 6),
+        'detail' => 'Mid average is below ' . (int)round($performance_threshold) . '% in these subjects.',
+        'primary_label' => 'Open Student View',
+        'primary_link' => $student_at_risk_link,
+        'secondary_label' => 'Review Teachers',
+        'secondary_link' => $teacher_at_risk_link
+    ];
 }
 if ($no_recent_updates > 0) {
-    $dashboard_insights[] = $no_recent_updates . ' teachers have no progress update in the last 7 days.';
+    $action_center_items[] = [
+        'title' => 'Faculty progress updates overdue',
+        'count' => $no_recent_updates,
+        'severity' => metric_severity_from_count($no_recent_updates, 2, 5),
+        'detail' => 'No syllabus update posted in the last 7 days.',
+        'primary_label' => 'View Faculty',
+        'primary_link' => $teacher_at_risk_link,
+        'secondary_label' => 'Send Reminder',
+        'secondary_link' => $alerts_link
+    ];
 }
-if (empty($dashboard_insights)) {
-    $dashboard_insights[] = 'No high-priority risk signal detected for the current filters.';
+if ($pending_alerts_count > 0) {
+    $action_center_items[] = [
+        'title' => 'Open alerts waiting for response',
+        'count' => $pending_alerts_count,
+        'severity' => metric_severity_from_count($pending_alerts_count, 3, 8),
+        'detail' => 'Alerts are pending acknowledgment from faculty.',
+        'primary_label' => 'Open Alerts',
+        'primary_link' => $alerts_link,
+        'secondary_label' => 'Track Teachers',
+        'secondary_link' => $teacher_progress_link
+    ];
 }
-$dashboard_insights = array_slice($dashboard_insights, 0, 2);
+if (empty($action_center_items)) {
+    $action_center_items[] = [
+        'title' => 'No high-priority action pending',
+        'count' => 0,
+        'severity' => 'low',
+        'detail' => 'Current filters show healthy progress and no urgent intervention required.',
+        'primary_label' => 'View Reports',
+        'primary_link' => 'program_reports.php',
+        'secondary_label' => '',
+        'secondary_link' => ''
+    ];
+}
+
+$pending_academic_actions = [];
+if ($below_threshold_courses > 0) {
+    $pending_academic_actions[] = [
+        'item' => 'Courses below syllabus threshold',
+        'count' => $below_threshold_courses,
+        'owner' => 'Course Coordinators',
+        'severity' => metric_severity_from_count($below_threshold_courses, 3, 8),
+        'link' => $course_progress_link,
+        'link_label' => 'Open Courses'
+    ];
+}
+if ($teacher_low_coverage_count > 0) {
+    $pending_academic_actions[] = [
+        'item' => 'Faculty below 50% evaluation coverage',
+        'count' => $teacher_low_coverage_count,
+        'owner' => 'Faculty',
+        'severity' => metric_severity_from_count($teacher_low_coverage_count, 2, 5),
+        'link' => $teacher_at_risk_link,
+        'link_label' => 'Open Faculty'
+    ];
+}
+if ($low_performing_students > 0) {
+    $pending_academic_actions[] = [
+        'item' => 'Students below 50% aggregate',
+        'count' => $low_performing_students,
+        'owner' => 'Mentors',
+        'severity' => metric_severity_from_count($low_performing_students, 10, 30),
+        'link' => $student_at_risk_link,
+        'link_label' => 'Open Students'
+    ];
+}
+if ($pending_alerts_count > 0) {
+    $pending_academic_actions[] = [
+        'item' => 'Pending faculty alerts',
+        'count' => $pending_alerts_count,
+        'owner' => 'Program Office',
+        'severity' => metric_severity_from_count($pending_alerts_count, 3, 8),
+        'link' => $alerts_link,
+        'link_label' => 'Open Alerts'
+    ];
+}
+if ($unevaluated_students > 0) {
+    $pending_academic_actions[] = [
+        'item' => 'Students with zero evaluation entries',
+        'count' => $unevaluated_students,
+        'owner' => 'Subject Faculty',
+        'severity' => metric_severity_from_count($unevaluated_students, 10, 25),
+        'link' => $students_page_link,
+        'link_label' => 'Open Student List'
+    ];
+}
 
 if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     $filename_parts = ['Program_Dashboard'];
@@ -1358,7 +1812,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <link rel="stylesheet" href="ica_tracker.css">
     <style>
-        .sa-stats { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
+        .sa-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:9px; margin-bottom:14px; }
         .sa-stat  { min-width:0; background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%); border-radius:10px; border:1px solid #e5e7eb; padding:8px 9px; display:flex; align-items:center; gap:8px; box-shadow:0 1px 4px rgba(0,0,0,.05); text-decoration:none; transition:transform .15s,box-shadow .15s,border-color .15s; }
         .sa-stat:hover { transform:translateY(-1px); box-shadow:0 4px 10px rgba(166,25,46,.10); border-color:#d9dee7; }
         .sa-stat-icon { width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0; }
@@ -1461,6 +1915,117 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         .table-wrap { overflow-x: auto; }
         .insight-list { margin: 0; padding-left: 18px; line-height: 1.45; }
         .insight-list li + li { margin-top: 4px; }
+        .action-center-list { display: grid; gap: 10px; }
+        .action-center-item {
+            border: 1px solid #e5e7eb;
+            border-left: 4px solid #16a34a;
+            border-radius: 10px;
+            padding: 10px 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            background: #ffffff;
+        }
+        .action-center-item.severity-medium { border-left-color: #d97706; background: #fffaf2; }
+        .action-center-item.severity-high { border-left-color: #b91c1c; background: #fff5f5; }
+        .action-center-main { min-width: 0; }
+        .action-center-title { margin: 0 0 3px; font-size: 0.94rem; font-weight: 700; color: #111827; }
+        .action-center-detail { margin: 0; font-size: 0.8rem; color: #6b7280; }
+        .action-center-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+        .severity-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 3px 9px;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+        .severity-pill.low { background: rgba(22, 163, 74, 0.15); color: #166534; }
+        .severity-pill.medium { background: rgba(217, 119, 6, 0.16); color: #92400e; }
+        .severity-pill.high { background: rgba(185, 28, 28, 0.15); color: #991b1b; }
+        .count-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 34px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #111827;
+            background: #f3f4f6;
+        }
+        .action-center-links { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .action-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #A6192E;
+            text-decoration: none;
+        }
+        .action-link:hover { text-decoration: underline; }
+        .pending-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            background: #f3f4f6;
+            color: #111827;
+        }
+        .risk-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .risk-panel {
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 10px;
+            background: #fff;
+            min-height: 180px;
+        }
+        .risk-panel h6 {
+            margin: 0 0 8px;
+            font-size: 0.84rem;
+            font-weight: 700;
+            color: #374151;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .risk-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: grid;
+            gap: 8px;
+        }
+        .risk-item {
+            border: 1px solid #eceff3;
+            border-radius: 8px;
+            padding: 8px;
+            background: #f8fafc;
+        }
+        .risk-item-main { font-size: 0.82rem; font-weight: 700; color: #111827; margin: 0 0 3px; }
+        .risk-item-sub { font-size: 0.75rem; color: #6b7280; margin: 0; }
+        .risk-empty {
+            margin: 0;
+            font-size: 0.79rem;
+            color: #6b7280;
+            padding: 10px;
+            border: 1px dashed #d1d5db;
+            border-radius: 8px;
+            background: #f9fafb;
+        }
         .analytics-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
         .analytics-filter { display: inline-flex; align-items: center; gap: 8px; }
         .analytics-filter label { margin: 0; font-size: 0.82rem; color: #6b7280; font-weight: 600; }
@@ -1490,6 +2055,13 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         @media (max-width: 700px) {
             .filter-grid {
                 grid-template-columns: 1fr;
+            }
+            .risk-grid {
+                grid-template-columns: 1fr;
+            }
+            .action-center-item {
+                flex-direction: column;
+                align-items: stretch;
             }
         }
     </style>
@@ -1525,9 +2097,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 <div class="sa-stats">
                     <a class="sa-stat" href="<?php echo htmlspecialchars($course_progress_link); ?>">
                         <div class="sa-stat-icon si-red"><i class="fas fa-book"></i></div>
-                        <div class="sa-stat-info"><h4>Total Courses</h4><div class="sa-stat-val"><?php echo $total_courses; ?></div></div>
+                        <div class="sa-stat-info"><h4>Courses Mapped</h4><div class="sa-stat-val"><?php echo $total_courses; ?></div></div>
                     </a>
-                    <a class="sa-stat" href="teacher_progress.php<?php echo $card_link_query !== '' ? ('?' . htmlspecialchars($card_link_query, ENT_QUOTES, 'UTF-8')) : ''; ?>">
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($teacher_progress_link); ?>">
                         <div class="sa-stat-icon si-blue"><i class="fas fa-chalkboard-teacher"></i></div>
                         <div class="sa-stat-info"><h4>Active Teachers</h4><div class="sa-stat-val"><?php echo $teachers_monitored; ?></div></div>
                     </a>
@@ -1539,28 +2111,175 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                         <div class="sa-stat-icon si-green"><i class="fas fa-check-double"></i></div>
                         <div class="sa-stat-info"><h4>Avg Syllabus</h4><div class="sa-stat-val"><?php echo $avg_syllabus; ?>%</div></div>
                     </a>
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($students_page_link); ?>">
+                        <div class="sa-stat-icon si-purple"><i class="fas fa-chart-line"></i></div>
+                        <div class="sa-stat-info"><h4>Avg ICA</h4><div class="sa-stat-val"><?php echo $avg_ica_performance !== null ? htmlspecialchars(rtrim(rtrim(number_format((float)$avg_ica_performance, 1, '.', ''), '0'), '.') . '%') : 'N/A'; ?></div></div>
+                    </a>
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($teacher_progress_link); ?>">
+                        <div class="sa-stat-icon si-teal"><i class="fas fa-clipboard-check"></i></div>
+                        <div class="sa-stat-info"><h4>Eval Coverage</h4><div class="sa-stat-val"><?php echo $evaluation_coverage_pct !== null ? (int)$evaluation_coverage_pct . '%' : 'N/A'; ?></div></div>
+                    </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($student_at_risk_link); ?>">
                         <div class="sa-stat-icon si-amber"><i class="fas fa-exclamation-triangle"></i></div>
                         <div class="sa-stat-info"><h4>Low Performing</h4><div class="sa-stat-val"><?php echo $low_performing_students; ?></div></div>
                     </a>
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($course_progress_link); ?>">
+                        <div class="sa-stat-icon si-red"><i class="fas fa-hourglass-half"></i></div>
+                        <div class="sa-stat-info"><h4>Courses Behind</h4><div class="sa-stat-val"><?php echo $below_threshold_courses; ?></div></div>
+                    </a>
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($teacher_at_risk_link); ?>">
+                        <div class="sa-stat-icon si-amber"><i class="fas fa-user-clock"></i></div>
+                        <div class="sa-stat-info"><h4>Faculty Pending</h4><div class="sa-stat-val"><?php echo $no_recent_updates; ?></div></div>
+                    </a>
                     <a class="sa-stat" href="<?php echo htmlspecialchars($alerts_link); ?>">
                         <div class="sa-stat-icon si-purple"><i class="fas fa-bell"></i></div>
-                        <div class="sa-stat-info"><h4>Pending Alerts</h4><div class="sa-stat-val"><?php echo $pending_alerts_count; ?></div></div>
+                        <div class="sa-stat-info"><h4>Open Alerts</h4><div class="sa-stat-val"><?php echo $pending_alerts_count; ?></div></div>
                     </a>
-                    <a class="sa-stat" href="<?php echo htmlspecialchars($week_link); ?>">
-                        <div class="sa-stat-icon si-red"><i class="fas fa-calendar-week"></i></div>
-                        <div class="sa-stat-info"><h4>Academic Week</h4><div class="sa-stat-val"><?php echo htmlspecialchars($week_number_display); ?></div></div>
+                    <a class="sa-stat" href="<?php echo htmlspecialchars($alerts_link); ?>">
+                        <div class="sa-stat-icon si-green"><i class="fas fa-check-circle"></i></div>
+                        <div class="sa-stat-info"><h4>Resolved Alerts</h4><div class="sa-stat-val"><?php echo $resolved_alerts_count; ?></div></div>
                     </a>
                 </div>
 
                 <div class="card">
-                    <div class="card-header"><h5>Program Chair Action Insights</h5></div>
+                    <div class="card-header"><h5>Program Chair Action Center</h5></div>
                     <div class="card-body">
-                        <ul class="insight-list">
-                            <?php foreach ($dashboard_insights as $insight_line): ?>
-                                <li><?php echo htmlspecialchars($insight_line); ?></li>
+                        <div class="action-center-list">
+                            <?php foreach ($action_center_items as $action_item): ?>
+                                <?php
+                                    $action_severity = isset($action_item['severity']) ? (string)$action_item['severity'] : 'low';
+                                    if (!in_array($action_severity, ['low', 'medium', 'high'], true)) {
+                                        $action_severity = 'low';
+                                    }
+                                ?>
+                                <div class="action-center-item severity-<?php echo htmlspecialchars($action_severity); ?>">
+                                    <div class="action-center-main">
+                                        <p class="action-center-title"><?php echo htmlspecialchars((string)($action_item['title'] ?? 'Action item')); ?></p>
+                                        <p class="action-center-detail"><?php echo htmlspecialchars((string)($action_item['detail'] ?? '')); ?></p>
+                                        <div class="action-center-meta">
+                                            <span class="severity-pill <?php echo htmlspecialchars($action_severity); ?>"><?php echo htmlspecialchars(ucfirst($action_severity)); ?></span>
+                                            <span class="count-pill"><?php echo (int)($action_item['count'] ?? 0); ?></span>
+                                        </div>
+                                    </div>
+                                    <div class="action-center-links">
+                                        <?php if (!empty($action_item['primary_link']) && !empty($action_item['primary_label'])): ?>
+                                            <a class="action-link" href="<?php echo htmlspecialchars((string)$action_item['primary_link']); ?>"><i class="fas fa-arrow-right"></i><?php echo htmlspecialchars((string)$action_item['primary_label']); ?></a>
+                                        <?php endif; ?>
+                                        <?php if (!empty($action_item['secondary_link']) && !empty($action_item['secondary_label'])): ?>
+                                            <a class="action-link" href="<?php echo htmlspecialchars((string)$action_item['secondary_link']); ?>"><i class="fas fa-bell"></i><?php echo htmlspecialchars((string)$action_item['secondary_label']); ?></a>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
                             <?php endforeach; ?>
-                        </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><h5>Pending Academic Actions</h5></div>
+                    <div class="card-body">
+                        <div class="table-wrap">
+                            <table class="table-compact">
+                                <thead>
+                                    <tr>
+                                        <th>Action Item</th>
+                                        <th>Count</th>
+                                        <th>Owner</th>
+                                        <th>Priority</th>
+                                        <th>Quick Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php if (!empty($pending_academic_actions)): ?>
+                                        <?php foreach ($pending_academic_actions as $pending_action): ?>
+                                            <?php
+                                                $pending_severity = isset($pending_action['severity']) ? (string)$pending_action['severity'] : 'low';
+                                                if (!in_array($pending_severity, ['low', 'medium', 'high'], true)) {
+                                                    $pending_severity = 'low';
+                                                }
+                                            ?>
+                                            <tr>
+                                                <td><?php echo htmlspecialchars((string)($pending_action['item'] ?? '')); ?></td>
+                                                <td><span class="pending-count"><?php echo (int)($pending_action['count'] ?? 0); ?></span></td>
+                                                <td><?php echo htmlspecialchars((string)($pending_action['owner'] ?? '')); ?></td>
+                                                <td><span class="severity-pill <?php echo htmlspecialchars($pending_severity); ?>"><?php echo htmlspecialchars(ucfirst($pending_severity)); ?></span></td>
+                                                <td>
+                                                    <?php if (!empty($pending_action['link']) && !empty($pending_action['link_label'])): ?>
+                                                        <a class="action-link" href="<?php echo htmlspecialchars((string)$pending_action['link']); ?>"><?php echo htmlspecialchars((string)$pending_action['link_label']); ?></a>
+                                                    <?php else: ?>
+                                                        —
+                                                    <?php endif; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="5">No pending academic action for the selected filters.</td></tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><h5>Top Risks This Week</h5></div>
+                    <div class="card-body">
+                        <div class="risk-grid">
+                            <div class="risk-panel">
+                                <h6>At-Risk Students</h6>
+                                <?php if (!empty($top_risk_students)): ?>
+                                    <ul class="risk-list">
+                                        <?php foreach ($top_risk_students as $risk_student): ?>
+                                            <li class="risk-item">
+                                                <p class="risk-item-main"><?php echo htmlspecialchars((string)$risk_student['student_name']); ?> (<?php echo htmlspecialchars((string)$risk_student['student_identifier']); ?>)</p>
+                                                <p class="risk-item-sub"><?php echo htmlspecialchars((string)$risk_student['class_label']); ?> | Avg <?php echo htmlspecialchars((string)$risk_student['avg_pct']); ?>%</p>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p class="risk-empty">No high-risk students found for the selected scope.</p>
+                                <?php endif; ?>
+                            </div>
+                            <div class="risk-panel">
+                                <h6>Weak Courses</h6>
+                                <?php if (!empty($top_risk_courses)): ?>
+                                    <ul class="risk-list">
+                                        <?php foreach ($top_risk_courses as $risk_course): ?>
+                                            <li class="risk-item">
+                                                <p class="risk-item-main"><?php echo htmlspecialchars((string)$risk_course['course_name']); ?> (<?php echo htmlspecialchars((string)$risk_course['class_label']); ?>)</p>
+                                                <p class="risk-item-sub">Syllabus <?php echo htmlspecialchars((string)$risk_course['syllabus_pct']); ?>% | Mid <?php echo $risk_course['mid_avg_pct'] !== null ? htmlspecialchars((string)$risk_course['mid_avg_pct']) . '%' : 'N/A'; ?> | <?php echo htmlspecialchars((string)$risk_course['teacher_name']); ?></p>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p class="risk-empty">No weak course signal detected for the selected scope.</p>
+                                <?php endif; ?>
+                            </div>
+                            <div class="risk-panel">
+                                <h6>Faculty Pending Updates</h6>
+                                <?php if (!empty($top_pending_faculty)): ?>
+                                    <ul class="risk-list">
+                                        <?php foreach ($top_pending_faculty as $pending_faculty): ?>
+                                            <li class="risk-item">
+                                                <p class="risk-item-main"><?php echo htmlspecialchars((string)$pending_faculty['teacher_name']); ?></p>
+                                                <p class="risk-item-sub">
+                                                    <?php
+                                                        if ($pending_faculty['days_since'] !== null) {
+                                                            echo htmlspecialchars((string)$pending_faculty['days_since']) . ' days since update';
+                                                        } else {
+                                                            echo 'No update logged yet';
+                                                        }
+                                                    ?>
+                                                    | Last: <?php echo htmlspecialchars((string)$pending_faculty['last_update_text']); ?>
+                                                </p>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p class="risk-empty">No delayed faculty update signal in this scope.</p>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2006,6 +2725,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                     return;
                 }
 
+                const hasNumericData = (values) => Array.isArray(values) && values.some((value) => value !== null && value !== undefined && Number.isFinite(Number(value)));
+
                 const compactAxisLabel = (value) => {
                     const label = String(value || '').trim();
                     if (label.length <= 16) {
@@ -2016,8 +2737,18 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
                 const source = getSelectedAnalyticsData(selectedClassId);
                 currentSubjectIds = source.subjectIds;
+                const hasSourceData = source.labels.length > 0 && (hasNumericData(source.syllabusValues) || hasNumericData(source.midValues));
+                const labelsToRender = source.labels.length > 0 ? source.labels : ['No data'];
+                const fullLabelsToRender = source.fullLabels.length > 0 ? source.fullLabels : ['No data'];
+                const syllabusValuesToRender = hasNumericData(source.syllabusValues) ? source.syllabusValues : labelsToRender.map(() => 0);
+                const midValuesToRender = hasNumericData(source.midValues) ? source.midValues : labelsToRender.map(() => 0);
+                const chartColors = hasSourceData
+                    ? labelsToRender.map((_, idx) => barPalette[idx % barPalette.length])
+                    : labelsToRender.map(() => '#cbd5e1');
                 if (analyticsModeNote) {
-                    analyticsModeNote.textContent = source.note;
+                    analyticsModeNote.textContent = hasSourceData
+                        ? source.note
+                        : `${source.note} No measurable syllabus or mid-evaluation data found for this scope.`;
                 }
 
                 if (syllabusChart) {
@@ -2026,11 +2757,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 syllabusChart = new Chart(lineCanvas, {
                     type: 'bar',
                     data: {
-                        labels: source.labels,
+                        labels: labelsToRender,
                         datasets: [{
                             label: 'Syllabus Coverage %',
-                            data: source.syllabusValues,
-                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            data: syllabusValuesToRender,
+                            backgroundColor: chartColors,
                             borderRadius: 4
                         }]
                     },
@@ -2041,13 +2772,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                             legend: { display: false },
                             tooltip: {
                                 callbacks: {
-                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
-                                    label: (ctx) => `Coverage: ${formatPercentLabel(ctx.raw)}`,
+                                    title: (tooltipItems) => tooltipItems.length ? (fullLabelsToRender[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => hasSourceData ? `Coverage: ${formatPercentLabel(ctx.raw)}` : 'No data available',
                                     afterLabel: (ctx) => {
+                                        if (!hasSourceData) {
+                                            return '';
+                                        }
                                         if (source.viewMode === 'subject') {
                                             return source.classContextLabel ? `Class/Div/Sem: ${source.classContextLabel}` : '';
                                         }
-                                        return `Class/Div/Sem: ${source.fullLabels[ctx.dataIndex] || ''}`;
+                                        return `Class/Div/Sem: ${fullLabelsToRender[ctx.dataIndex] || ''}`;
                                     }
                                 }
                             }
@@ -2071,6 +2805,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                             }
                         },
                         onClick: (event) => {
+                            if (!hasSourceData) {
+                                return;
+                            }
                             const points = syllabusChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
                             if (!points.length) {
                                 return;
@@ -2089,11 +2826,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 midChart = new Chart(midBarCanvas, {
                     type: 'bar',
                     data: {
-                        labels: source.labels,
+                        labels: labelsToRender,
                         datasets: [{
                             label: 'Mid Exam Avg %',
-                            data: source.midValues,
-                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            data: midValuesToRender,
+                            backgroundColor: chartColors,
                             borderRadius: 4
                         }]
                     },
@@ -2104,13 +2841,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                             legend: { display: false },
                             tooltip: {
                                 callbacks: {
-                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
-                                    label: (ctx) => `Mid Avg: ${formatPercentLabel(ctx.raw)}`,
+                                    title: (tooltipItems) => tooltipItems.length ? (fullLabelsToRender[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => hasSourceData ? `Mid Avg: ${formatPercentLabel(ctx.raw)}` : 'No data available',
                                     afterLabel: (ctx) => {
+                                        if (!hasSourceData) {
+                                            return '';
+                                        }
                                         if (source.viewMode === 'subject') {
                                             return source.classContextLabel ? `Class/Div/Sem: ${source.classContextLabel}` : '';
                                         }
-                                        return `Class/Div/Sem: ${source.fullLabels[ctx.dataIndex] || ''}`;
+                                        return `Class/Div/Sem: ${fullLabelsToRender[ctx.dataIndex] || ''}`;
                                     }
                                 }
                             }

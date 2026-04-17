@@ -136,10 +136,6 @@ $selected_class_key = isset($_GET['class_filter']) ? trim((string)$_GET['class_f
 if ($selected_class_key === '' && $selected_class > 0) {
     $selected_class_key = $selected_class . ':0';
 }
-$selected_class_key_filter_sql = '';
-if ($selected_class_key !== '' && preg_match('/^\d+:\d+$/', $selected_class_key) === 1) {
-    $selected_class_key_filter_sql = " AND CONCAT(c.id, ':', COALESCE(tsa.section_id, 0)) = '" . mysqli_real_escape_string($conn, $selected_class_key) . "'";
-}
 
 // Fetch up to 5 pending alerts for quick display
 $alerts_query = "SELECT id, message, created_at FROM alerts WHERE teacher_id = ? AND status = 'pending'";
@@ -369,6 +365,7 @@ foreach ($assignmentRows as $row) {
         'subject_id' => $subjectId,
         'subject_name' => $subjectNameRaw,
         'subject_name_display' => $subjectDisplay,
+        'class_name_raw' => $classNameRaw,
         'total_planned_hours' => $totalPlanned,
         'subject_type' => strtolower($row['subject_type'] ?? 'regular'),
         'theory_hours' => $theoryHours,
@@ -378,6 +375,7 @@ foreach ($assignmentRows as $row) {
         'class_label' => $classLabel,
         'class_id' => $classId,
         'section_id' => $sectionId,
+        'section_name' => $sectionName,
         'school' => $schoolLabel,
         'semester' => $semesterLabel,
         'has_assignment' => true
@@ -567,100 +565,192 @@ while ($row = mysqli_fetch_assoc($progress_result)) {
 mysqli_stmt_close($stmt_progress);
 
 
-// --- START: DATA FOR GRAPHS (MODIFIED WITH FILTERS) ---
-
-// 1. Syllabus Progress Chart Data
-$syllabus_chart_query = "SELECT 
-                            s.subject_name AS subject,
-                            c.class_name,
-                            c.semester,
-                            c.school,
-                            COALESCE(sec.section_name, '') AS section_name,
-                            MAX(CASE WHEN sp.timeline LIKE 'week_%' AND CAST(SUBSTRING_INDEX(sp.timeline, '_', -1) AS UNSIGNED) BETWEEN 1 AND 5 THEN sp.completion_percentage END) AS week5_completion,
-                            MAX(CASE WHEN sp.timeline LIKE 'week_%' AND CAST(SUBSTRING_INDEX(sp.timeline, '_', -1) AS UNSIGNED) BETWEEN 6 AND 10 THEN sp.completion_percentage END) AS week10_completion,
-                            MAX(CASE WHEN sp.timeline = 'final' THEN sp.completion_percentage END) AS final_checkpoint
-                        FROM teacher_subject_assignments tsa
-                        JOIN subjects s ON s.id = tsa.subject_id
-                        LEFT JOIN classes c ON c.id = tsa.class_id
-                        LEFT JOIN sections sec ON sec.id = tsa.section_id
-                        LEFT JOIN syllabus_progress sp ON sp.subject = s.subject_name AND sp.teacher_id = tsa.teacher_id AND sp.class_id = c.id AND sp.section_id = COALESCE(tsa.section_id, 0)
-                        WHERE tsa.teacher_id = ?";
-$syllabus_chart_query .= $selected_class_key_filter_sql;
-if ($termStartBound && $termEndBound) {
-    $syllabus_chart_query .= " AND sp.updated_at BETWEEN ? AND ?";
+// --- START: DATA FOR ANALYTICS CHARTS (PROGRAM-STYLE) ---
+$midAveragesByAssignment = [];
+$mid_marks_chart_query = "SELECT
+                            s.id AS subject_id,
+                            s.subject_name,
+                            c.id AS class_id,
+                            COALESCE(tsa.section_id, 0) AS section_id,
+                            AVG((ism.marks / ic.marks_per_instance) * 100) AS mid_avg
+                        FROM ica_student_marks ism
+                        JOIN ica_components ic ON ism.component_id = ic.id
+                        JOIN subjects s ON ic.subject_id = s.id
+                        JOIN students st ON st.id = ism.student_id
+                        JOIN teacher_subject_assignments tsa ON tsa.teacher_id = ism.teacher_id
+                            AND tsa.subject_id = s.id
+                            AND tsa.class_id = st.class_id
+                            AND (COALESCE(tsa.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa.section_id, 0))
+                        JOIN classes c ON c.id = tsa.class_id
+                        WHERE ism.teacher_id = ?
+                          AND ic.marks_per_instance > 0
+                          AND ic.component_name LIKE '%Mid Exam%'";
+if ($activeTermId > 0) {
+    $mid_marks_chart_query .= " AND c.academic_term_id = ?";
 }
-$syllabus_chart_query .= " GROUP BY s.id, s.subject_name, c.id, c.class_name, c.semester, c.school, section_name ORDER BY s.subject_name, c.class_name";
-
-$stmt_syllabus_chart = mysqli_prepare($conn, $syllabus_chart_query);
 if ($termStartBound && $termEndBound) {
-    mysqli_stmt_bind_param($stmt_syllabus_chart, "iss", $teacher_id, $termStartBound, $termEndBound);
-} else {
-    mysqli_stmt_bind_param($stmt_syllabus_chart, "i", $teacher_id);
+    $mid_marks_chart_query .= " AND ism.updated_at BETWEEN ? AND ?";
 }
-mysqli_stmt_execute($stmt_syllabus_chart);
-$syllabus_chart_result = mysqli_stmt_get_result($stmt_syllabus_chart);
-$syllabus_chart_data = [];
-while ($row = mysqli_fetch_assoc($syllabus_chart_result)) {
-    $subjectLabel = isset($row['subject']) ? trim((string)$row['subject']) : '';
-    $classLabel = format_class_label(
-        $row['class_name'] ?? '',
-        $row['section_name'] ?? '',
-        $row['semester'] ?? '',
-        $row['school'] ?? ''
-    );
-    $chartLabel = format_subject_display($subjectLabel);
-    if ($classLabel !== '') {
-        $chartLabel .= ' — ' . $classLabel;
+$mid_marks_chart_query .= " GROUP BY s.id, s.subject_name, c.id, section_id";
+
+$stmt_mid_marks_chart = mysqli_prepare($conn, $mid_marks_chart_query);
+if ($stmt_mid_marks_chart) {
+    if ($activeTermId > 0 && $termStartBound && $termEndBound) {
+        mysqli_stmt_bind_param($stmt_mid_marks_chart, "iiss", $teacher_id, $activeTermId, $termStartBound, $termEndBound);
+    } elseif ($activeTermId > 0) {
+        mysqli_stmt_bind_param($stmt_mid_marks_chart, "ii", $teacher_id, $activeTermId);
+    } elseif ($termStartBound && $termEndBound) {
+        mysqli_stmt_bind_param($stmt_mid_marks_chart, "iss", $teacher_id, $termStartBound, $termEndBound);
+    } else {
+        mysqli_stmt_bind_param($stmt_mid_marks_chart, "i", $teacher_id);
     }
-    $syllabus_chart_data[] = [
-        'subject' => $subjectLabel,
-        'subject_display' => $chartLabel,
-        'week5' => isset($row['week5_completion']) ? (int)$row['week5_completion'] : null,
-        'week10' => isset($row['week10_completion']) ? (int)$row['week10_completion'] : null,
-        'final' => isset($row['final_checkpoint']) ? (int)$row['final_checkpoint'] : null
+
+    mysqli_stmt_execute($stmt_mid_marks_chart);
+    $mid_marks_chart_result = mysqli_stmt_get_result($stmt_mid_marks_chart);
+    if ($mid_marks_chart_result) {
+        while ($row = mysqli_fetch_assoc($mid_marks_chart_result)) {
+            $subjectName = trim((string)($row['subject_name'] ?? ''));
+            $classId = isset($row['class_id']) ? (int)$row['class_id'] : 0;
+            $sectionId = isset($row['section_id']) ? (int)$row['section_id'] : 0;
+            if ($subjectName === '' || $classId <= 0) {
+                continue;
+            }
+            $assignmentKey = build_assignment_key($subjectName, $classId, $sectionId);
+            if ($assignmentKey === '') {
+                continue;
+            }
+            $midAveragesByAssignment[$assignmentKey] = isset($row['mid_avg']) && $row['mid_avg'] !== null
+                ? (float)$row['mid_avg']
+                : null;
+        }
+        mysqli_free_result($mid_marks_chart_result);
+    }
+    mysqli_stmt_close($stmt_mid_marks_chart);
+}
+
+$teacherAnalyticsClassSummary = [];
+$teacherAnalyticsClassSubjectData = [];
+$classBuckets = [];
+$processedAssignments = [];
+
+foreach ($subjects as $subject) {
+    $assignmentKey = (string)($subject['assignment_key'] ?? '');
+    if ($assignmentKey === '' || isset($processedAssignments[$assignmentKey])) {
+        continue;
+    }
+    $processedAssignments[$assignmentKey] = true;
+
+    $classId = (int)($subject['class_id'] ?? 0);
+    $sectionId = (int)($subject['section_id'] ?? 0);
+    if ($classId <= 0) {
+        continue;
+    }
+
+    $classKey = $classId . ':' . $sectionId;
+    $classLabel = trim((string)($subject['class_label'] ?? ''));
+    if ($classLabel === '') {
+        $classLabel = 'Class ' . $classId;
+    }
+    $classNameRaw = trim((string)($subject['class_name_raw'] ?? ''));
+    $semesterValue = trim((string)($subject['semester'] ?? ''));
+    $divisionValue = trim((string)($subject['section_name'] ?? ''));
+    $classLabelShort = $classNameRaw !== '' ? format_subject_display($classNameRaw) : $classLabel;
+    $classMetaParts = [];
+    if ($semesterValue !== '') {
+        $classMetaParts[] = 'Sem ' . $semesterValue;
+    }
+    if ($divisionValue !== '') {
+        $classMetaParts[] = 'Div ' . $divisionValue;
+    }
+    if (!empty($classMetaParts)) {
+        $classLabelShort .= ' (' . implode(' | ', $classMetaParts) . ')';
+    }
+
+    if (!isset($classBuckets[$classKey])) {
+        $classBuckets[$classKey] = [
+            'class_key' => $classKey,
+            'class_id' => $classId,
+            'section_id' => $sectionId,
+            'class_label' => $classLabel,
+            'class_label_short' => $classLabelShort,
+            'subjects' => []
+        ];
+    }
+
+    $subjectName = trim((string)($subject['subject_name'] ?? ''));
+    $subjectDisplay = (string)($subject['subject_name_display'] ?? $subjectName);
+    $progressRow = $progress_by_subject[$assignmentKey] ?? null;
+    $syllabusAvg = null;
+    if (is_array($progressRow) && isset($progressRow['completion_percentage']) && $progressRow['completion_percentage'] !== null) {
+        $syllabusAvg = (float)$progressRow['completion_percentage'];
+    }
+
+    $midAvg = array_key_exists($assignmentKey, $midAveragesByAssignment)
+        ? $midAveragesByAssignment[$assignmentKey]
+        : null;
+
+    $classBuckets[$classKey]['subjects'][] = [
+        'assignment_key' => $assignmentKey,
+        'subject_id' => (int)($subject['subject_id'] ?? 0),
+        'subject_name' => $subjectName,
+        'subject_name_display' => $subjectDisplay,
+        'syllabus_avg' => $syllabusAvg !== null ? round($syllabusAvg, 2) : null,
+        'mid_avg' => $midAvg !== null ? round((float)$midAvg, 2) : null
     ];
 }
-mysqli_stmt_close($stmt_syllabus_chart);
 
+foreach ($classBuckets as $classKey => $bucket) {
+    usort($bucket['subjects'], static function (array $a, array $b): int {
+        return strcasecmp((string)($a['subject_name_display'] ?? ''), (string)($b['subject_name_display'] ?? ''));
+    });
 
-// 2. Mid Marks Chart Data
-$mid_marks_query = "SELECT s.subject_name,
-                        AVG(CASE WHEN ic.component_name LIKE '%Mid Exam%' THEN (ism.marks / ic.marks_per_instance) * 100 ELSE NULL END) as mid_avg
-                    FROM ica_student_marks ism
-                    JOIN ica_components ic ON ism.component_id = ic.id
-                    JOIN subjects s ON ic.subject_id = s.id
-                    JOIN students st ON st.id = ism.student_id
-                    JOIN teacher_subject_assignments tsa ON tsa.teacher_id = ism.teacher_id
-                        AND tsa.subject_id = s.id
-                        AND tsa.class_id = st.class_id
-                        AND (COALESCE(tsa.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa.section_id, 0))
-                    JOIN classes c ON c.id = tsa.class_id";
-$mid_marks_query .= " WHERE ism.teacher_id = ? AND ic.marks_per_instance > 0 AND ic.component_name LIKE '%Mid Exam%'";
-$mid_marks_query .= $selected_class_key_filter_sql;
-if ($termStartBound && $termEndBound) {
-    $mid_marks_query .= " AND ism.updated_at BETWEEN ? AND ?";
-}
-$mid_marks_query .= " GROUP BY s.id, s.subject_name";
+    $syllabusSum = 0.0;
+    $syllabusCount = 0;
+    $midSum = 0.0;
+    $midCount = 0;
 
-$stmt_mid_marks = mysqli_prepare($conn, $mid_marks_query);
-if ($termStartBound && $termEndBound) {
-    mysqli_stmt_bind_param($stmt_mid_marks, "iss", $teacher_id, $termStartBound, $termEndBound);
-} else {
-    mysqli_stmt_bind_param($stmt_mid_marks, "i", $teacher_id);
-}
-mysqli_stmt_execute($stmt_mid_marks);
-$mid_marks_result = mysqli_stmt_get_result($stmt_mid_marks);
-$mid_marks_data = [];
-while ($row = mysqli_fetch_assoc($mid_marks_result)) {
-    $subjectLabel = isset($row['subject_name']) ? trim((string)$row['subject_name']) : '';
-    $mid_marks_data[] = [
-        'subject_name' => $subjectLabel,
-        'subject_name_display' => format_subject_display($subjectLabel),
-        'mid_avg' => isset($row['mid_avg']) ? (float)$row['mid_avg'] : null
+    foreach ($bucket['subjects'] as $subjectEntry) {
+        if (isset($subjectEntry['syllabus_avg']) && $subjectEntry['syllabus_avg'] !== null) {
+            $syllabusSum += (float)$subjectEntry['syllabus_avg'];
+            $syllabusCount++;
+        }
+        if (isset($subjectEntry['mid_avg']) && $subjectEntry['mid_avg'] !== null) {
+            $midSum += (float)$subjectEntry['mid_avg'];
+            $midCount++;
+        }
+    }
+
+    $classSummaryEntry = [
+        'class_key' => $bucket['class_key'],
+        'class_id' => $bucket['class_id'],
+        'section_id' => $bucket['section_id'],
+        'class_label' => $bucket['class_label'],
+        'class_label_short' => $bucket['class_label_short'],
+        'syllabus_avg' => $syllabusCount > 0 ? round($syllabusSum / $syllabusCount, 2) : null,
+        'mid_avg' => $midCount > 0 ? round($midSum / $midCount, 2) : null
+    ];
+
+    $teacherAnalyticsClassSummary[] = $classSummaryEntry;
+    $teacherAnalyticsClassSubjectData[$classKey] = [
+        'class_key' => $bucket['class_key'],
+        'class_id' => $bucket['class_id'],
+        'section_id' => $bucket['section_id'],
+        'class_label' => $bucket['class_label'],
+        'class_label_short' => $bucket['class_label_short'],
+        'subjects' => $bucket['subjects']
     ];
 }
-mysqli_stmt_close($stmt_mid_marks);
-// --- END: DATA FOR GRAPHS ---
+
+usort($teacherAnalyticsClassSummary, static function (array $a, array $b): int {
+    return strcasecmp((string)($a['class_label'] ?? ''), (string)($b['class_label'] ?? ''));
+});
+
+if ($selected_class_key !== '' && !isset($teacherAnalyticsClassSubjectData[$selected_class_key])) {
+    $selected_class_key = '';
+}
+
+$analyticsClassFilterInitial = $selected_class_key;
+// --- END: DATA FOR ANALYTICS CHARTS ---
 ?>
 
 <!DOCTYPE html>
@@ -835,68 +925,94 @@ mysqli_stmt_close($stmt_mid_marks);
     body.dark-mode .progress-status.status-positive { background:#2f5141; color:#d8f5e3; border-color:#3f7157; }
     body.dark-mode .progress-status.status-negative { background:#5a2a31; color:#ffd7de; border-color:#7a3a45; }
 
-        /* START: Modified styles for charts and filters */
-        .chart-grid {
+        .section-label {
+            font-size: .72rem;
+            font-weight: 700;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin: 14px 0 8px;
+        }
+        .charts-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-top: 20px;
+            gap: 12px;
+            margin-bottom: 12px;
         }
-        .chart-container {
-            position: relative;
-            height: 350px;
-            width: 100%;
+        .chart-card {
+            background: #fff;
+            border-radius: 7px;
+            border: 1px solid #e5e7eb;
+            padding: 10px 13px;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, .06);
         }
-        .card-header {
+        .chart-card-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .chart-card-title i {
+            color: #A6192E;
+            font-size: .92rem;
+        }
+        .chart-note {
+            margin: 0 0 8px;
+            font-size: 0.78rem;
+            color: #6b7280;
+        }
+        .analytics-header-right {
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .analytics-filter {
+            display: inline-flex;
             align-items: center;
-            gap: 15px;
+            gap: 8px;
         }
-        .card-header form {
-            margin: 0; padding: 0; box-shadow: none; background: none;
+        .analytics-filter label {
+            margin: 0;
+            font-size: 0.82rem;
+            color: #6b7280;
+            font-weight: 600;
         }
-        .card-header .form-group {
-            display: flex; align-items: center; gap: 8px; margin-bottom: 0;
+        .analytics-filter select {
+            min-width: 210px;
+            max-width: 280px;
+            margin: 0;
+            padding: 6px 10px;
+            font-size: 0.86rem;
         }
-        .card-header label {
-            margin-bottom: 0; font-size: 0.9em; font-weight: normal; white-space: nowrap;
-        }
-        .card-header select {
-            padding: 6px 10px; font-size: 0.9em; border-radius: 6px; margin-bottom: 0;
-        }
-        .chart-filter-form {
-            margin-left: auto;
-        }
-        .chart-filter-form .form-group {
-            justify-content: flex-end;
-        }
-        .chart-filter-form select {
-            width: auto;
-            min-width: 260px;
-            max-width: 360px;
+        .chart-card canvas {
+            max-height: 260px;
+            min-height: 240px;
         }
         @media (max-width: 992px) {
-            .chart-grid {
-                grid-template-columns: 1fr; /* Stack charts on smaller screens */
+            .charts-row {
+                grid-template-columns: 1fr;
             }
             .subject-grid {
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             }
-            .chart-filter-form {
-                margin-left: 0;
+            .analytics-header-right {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .analytics-filter {
                 width: 100%;
             }
-            .chart-filter-form .form-group {
-                justify-content: flex-start;
-            }
-            .chart-filter-form select {
+            .analytics-filter select {
                 width: 100%;
                 min-width: 0;
                 max-width: none;
             }
         }
-        /* END: Modified styles */
     </style>
 </head>
 <body class="teacher-role">
@@ -985,11 +1101,20 @@ mysqli_stmt_close($stmt_mid_marks);
                                             <span class="subject-type-badge">Elective</span>
                                         <?php endif; ?>
                                         <span class="subject-name"><?php echo htmlspecialchars($subject['subject_name_display'] ?? $subject['subject_name']); ?></span>
-                                        <span class="subject-hours"><?php echo (int)$subject['theory_hours']; ?> theory / <?php echo (int)$subject['practical_hours']; ?> <?php echo htmlspecialchars($subject['practical_label'] ?? 'Practical'); ?> (<?php echo (int)$subject['total_planned_hours']; ?> total)</span>
                                         <?php if (!empty($subject['class_label'])): ?>
-                                            <span class="subject-classes"><?php echo htmlspecialchars($subject['class_label']); ?></span>
-                                            <?php if (!empty($subject['school']) || !empty($subject['semester'])): ?>
-                                                <span class="subject-class-meta"><?php echo htmlspecialchars(trim(($subject['school'] ?? '') . (isset($subject['school'], $subject['semester']) && $subject['school'] && $subject['semester'] ? ' • ' : '') . ($subject['semester'] ?? ''))); ?></span>
+                                            <?php
+                                                $semDivParts = [];
+                                                $semesterValue = trim((string)($subject['semester'] ?? ''));
+                                                $divisionValue = trim((string)($subject['section_name'] ?? ''));
+                                                if ($semesterValue !== '') {
+                                                    $semDivParts[] = 'SEM: ' . $semesterValue;
+                                                }
+                                                if ($divisionValue !== '') {
+                                                    $semDivParts[] = 'DIV: ' . $divisionValue;
+                                                }
+                                            ?>
+                                            <?php if (!empty($semDivParts)): ?>
+                                                <span class="subject-classes"><?php echo htmlspecialchars(implode(' • ', $semDivParts)); ?></span>
                                             <?php endif; ?>
                                         <?php elseif (isset($subject['has_assignment']) && !$subject['has_assignment']): ?>
                                             <span class="subject-classes subject-classes--empty">Class link missing - ask admin to reassign this subject.</span>
@@ -1006,39 +1131,24 @@ mysqli_stmt_close($stmt_mid_marks);
                 <div id="subject-details-panel" class="card">
                 </div>
 
-                <div class="chart-grid">
-                    <div class="card">
-                        <div class="card-header">
-                            <h5>Syllabus Progress (%)</h5>
-                        </div>
-                        <div class="card-body">
-                            <div class="chart-container">
-                                <canvas id="syllabusProgressChart"></canvas>
-                            </div>
-                        </div>
+                <p class="section-label">Analytics</p>
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <div class="chart-card-title"><i class="fas fa-chart-line"></i> Syllabus Coverage (%)</div>
+                        <p class="chart-note" id="analytics_mode_note">Showing class/division-wise average across all mapped subjects.</p>
+                        <canvas id="syllabusProgressChart"></canvas>
                     </div>
-                    <div class="card">
-                        <div class="card-header">
-                            <h5>Mid-Term Average Marks (%)</h5>
-                            <form method="GET" id="midFilterForm" class="chart-filter-form">
-                                <div class="form-group">
-                                    <label>Filter by Class/Division:</label>
-                                    <select name="class_filter" onchange="this.form.submit()">
-                                        <option value="">All My Classes</option>
-                                        <?php foreach ($filter_classes as $class): ?>
-                                            <option value="<?php echo htmlspecialchars($class['key']); ?>" <?php echo $selected_class_key === $class['key'] ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($class['class_name']); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                            </form>
-                        </div>
-                        <div class="card-body">
-                            <div class="chart-container">
-                                <canvas id="midMarksChart"></canvas>
+                    <div class="chart-card">
+                        <div class="analytics-header-right">
+                            <div class="chart-card-title"><i class="fas fa-chart-bar"></i> Mid Exam Performance (%)</div>
+                            <div class="analytics-filter">
+                                <label for="analytics_class_filter">View By</label>
+                                <select id="analytics_class_filter">
+                                    <option value="">Class/Division-wise Average</option>
+                                </select>
                             </div>
                         </div>
+                        <canvas id="midMarksChart"></canvas>
                     </div>
                 </div>
 
@@ -1297,71 +1407,234 @@ mysqli_stmt_close($stmt_mid_marks);
                 detailsPanel.innerHTML = contentHTML;
             }
 
-            // --- START: Chart Rendering ---
-            
-            // 1. Syllabus Progress Chart
-            const syllabusData = <?php echo json_encode($syllabus_chart_data); ?>;
-            const syllabusLabels = syllabusData.map(item => item.subject_display || item.subject || '');
-            const week5Series = syllabusData.map(item => item.week5);
-            const week10Series = syllabusData.map(item => item.week10);
-            const finalSeries = syllabusData.map(item => item.final);
-            new Chart(document.getElementById('syllabusProgressChart'), {
-                type: 'bar',
-                data: {
-                    labels: syllabusLabels,
-                    datasets: [
-                        {
-                            label: 'Week 5 Progress',
-                            data: week5Series,
-                            backgroundColor: 'rgba(255, 99, 132, 0.7)',
-                        },
-                        {
-                            label: 'Week 10 Progress',
-                            data: week10Series,
-                            backgroundColor: 'rgba(54, 162, 235, 0.7)',
-                        },
-                        {
-                            label: 'Final Progress',
-                            data: finalSeries,
-                            backgroundColor: 'rgba(75, 192, 192, 0.7)',
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, max: 100, ticks: { callback: value => value + '%' } },
-                        x: { stacked: false }
-                    },
-                    plugins: { legend: { position: 'top' } }
+            // --- START: Chart Rendering (Program Chair style) ---
+            const classSummaryData = <?php echo json_encode($teacherAnalyticsClassSummary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const classSubjectData = <?php echo json_encode($teacherAnalyticsClassSubjectData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+            const currentClassFilter = <?php echo json_encode($analyticsClassFilterInitial, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+
+            const RED = '#A6192E';
+            const barPalette = ['#A6192E', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0d9488'];
+            const lineCanvas = document.getElementById('syllabusProgressChart');
+            const midBarCanvas = document.getElementById('midMarksChart');
+            const analyticsClassFilter = document.getElementById('analytics_class_filter');
+            const analyticsModeNote = document.getElementById('analytics_mode_note');
+
+            let syllabusChart = null;
+            let midChart = null;
+
+            const formatPercentLabel = (value) => {
+                const num = Number(value);
+                if (!Number.isFinite(num)) {
+                    return 'N/A';
                 }
+                return `${(Math.round(num * 10) / 10).toFixed(1)}%`;
+            };
+
+            classSummaryData.forEach((row) => {
+                if (!analyticsClassFilter) {
+                    return;
+                }
+                const opt = document.createElement('option');
+                opt.value = String(row.class_key || row.class_id || '');
+                opt.textContent = row.class_label_short || row.class_label || `Class ${row.class_id}`;
+                analyticsClassFilter.appendChild(opt);
             });
 
-            // 2. Mid Marks Chart
-            const midMarksData = <?php echo json_encode($mid_marks_data); ?>;
-            const midMarksLabels = midMarksData.map(item => item.subject_name_display || item.subject_name || '');
-            new Chart(document.getElementById('midMarksChart'), {
-                type: 'bar',
-                data: {
-                    labels: midMarksLabels,
-                    datasets: [
-                        {
-                            label: 'Mid Exam Average',
-                            data: midMarksData.map(item => item.mid_avg),
-                            backgroundColor: 'rgba(255, 206, 86, 0.7)',
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, max: 100, ticks: { callback: value => value + '%' } }
-                    },
-                    plugins: { legend: { position: 'top' } }
+            if (analyticsClassFilter && currentClassFilter) {
+                analyticsClassFilter.value = String(currentClassFilter);
+            }
+
+            const getSelectedAnalyticsData = (selectedClassKey) => {
+                const classKey = String(selectedClassKey || '');
+                if (classKey !== '') {
+                    const classEntry = classSummaryData.find((item) => String(item.class_key || '') === classKey);
+                    if (classEntry) {
+                        const classLabelShort = classEntry.class_label_short || classEntry.class_label || `Class ${classEntry.class_id}`;
+                        const classLabelFull = classEntry.class_label || classLabelShort;
+                        return {
+                            labels: [classLabelShort],
+                            fullLabels: [classLabelFull],
+                            syllabusValues: [classEntry.syllabus_avg !== null ? Number(classEntry.syllabus_avg) : null],
+                            midValues: [classEntry.mid_avg !== null ? Number(classEntry.mid_avg) : null],
+                            viewMode: 'class',
+                            classContextLabel: classLabelFull,
+                            note: `Showing selected class/division: ${classLabelFull}.`
+                        };
+                    }
                 }
-            });
+
+                return {
+                    labels: classSummaryData.map(item => item.class_label_short || item.class_label || `Class ${item.class_id}`),
+                    fullLabels: classSummaryData.map(item => item.class_label || item.class_label_short || `Class ${item.class_id}`),
+                    syllabusValues: classSummaryData.map(item => item.syllabus_avg !== null ? Number(item.syllabus_avg) : null),
+                    midValues: classSummaryData.map(item => item.mid_avg !== null ? Number(item.mid_avg) : null),
+                    viewMode: 'class',
+                    classContextLabel: '',
+                    note: 'Showing class/division-wise average across all mapped subjects taught by you.'
+                };
+            };
+
+            const wrapAxisLabel = (value, maxCharsPerLine = 16, maxLines = 3) => {
+                const label = String(value || '').trim();
+                if (label === '') {
+                    return [''];
+                }
+
+                const words = label.split(/\s+/).filter(Boolean);
+                const lines = [];
+                let currentLine = '';
+
+                words.forEach((word) => {
+                    const candidate = currentLine ? `${currentLine} ${word}` : word;
+                    if (candidate.length <= maxCharsPerLine) {
+                        currentLine = candidate;
+                        return;
+                    }
+
+                    if (currentLine) {
+                        lines.push(currentLine);
+                    }
+
+                    if (word.length <= maxCharsPerLine) {
+                        currentLine = word;
+                        return;
+                    }
+
+                    const chunks = word.match(new RegExp(`.{1,${maxCharsPerLine}}`, 'g')) || [word];
+                    if (chunks.length > 1) {
+                        chunks.slice(0, -1).forEach((chunk) => lines.push(chunk));
+                    }
+                    currentLine = chunks[chunks.length - 1];
+                });
+
+                if (currentLine) {
+                    lines.push(currentLine);
+                }
+
+                if (lines.length <= maxLines) {
+                    return lines;
+                }
+
+                const trimmed = lines.slice(0, maxLines);
+                const lastIndex = maxLines - 1;
+                const lastLine = trimmed[lastIndex];
+                trimmed[lastIndex] = lastLine.length >= maxCharsPerLine
+                    ? `${lastLine.slice(0, Math.max(1, maxCharsPerLine - 3))}...`
+                    : `${lastLine}...`;
+
+                return trimmed;
+            };
+            const renderAnalyticsCharts = (selectedClassKey) => {
+                if (!lineCanvas || !midBarCanvas) {
+                    return;
+                }
+
+                const source = getSelectedAnalyticsData(selectedClassKey);
+
+                if (analyticsModeNote) {
+                    analyticsModeNote.textContent = source.note;
+                }
+
+                if (syllabusChart) {
+                    syllabusChart.destroy();
+                }
+                syllabusChart = new Chart(lineCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: source.labels,
+                        datasets: [{
+                            label: 'Syllabus Coverage %',
+                            data: source.syllabusValues,
+                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            borderRadius: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => `Coverage: ${formatPercentLabel(ctx.raw)}`,
+                                    afterLabel: (ctx) => `Class/Div/Sem: ${source.fullLabels[ctx.dataIndex] || ''}`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: { beginAtZero: true, max: 100 },
+                            x: {
+                                ticks: {
+                                    autoSkip: false,
+                                    maxRotation: 0,
+                                    minRotation: 0,
+                                    padding: 2,
+                                    callback: function(value) {
+                                        const raw = this.getLabelForValue(value);
+                                        return wrapAxisLabel(raw, 16, 3);
+                                    },
+                                    font: { size: 9 }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (midChart) {
+                    midChart.destroy();
+                }
+                midChart = new Chart(midBarCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: source.labels,
+                        datasets: [{
+                            label: 'Mid Exam Avg %',
+                            data: source.midValues,
+                            backgroundColor: source.labels.map((_, idx) => barPalette[idx % barPalette.length]),
+                            borderRadius: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    title: (tooltipItems) => tooltipItems.length ? (source.fullLabels[tooltipItems[0].dataIndex] || '') : '',
+                                    label: (ctx) => `Mid Avg: ${formatPercentLabel(ctx.raw)}`,
+                                    afterLabel: (ctx) => `Class/Div/Sem: ${source.fullLabels[ctx.dataIndex] || ''}`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: { beginAtZero: true, max: 100 },
+                            x: {
+                                ticks: {
+                                    autoSkip: false,
+                                    maxRotation: 0,
+                                    minRotation: 0,
+                                    padding: 2,
+                                    callback: function(value) {
+                                        const raw = this.getLabelForValue(value);
+                                        return wrapAxisLabel(raw, 16, 3);
+                                    },
+                                    font: { size: 9 }
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+
+            if (analyticsClassFilter) {
+                analyticsClassFilter.addEventListener('change', () => {
+                    renderAnalyticsCharts(analyticsClassFilter.value || '');
+                });
+            }
+
+            renderAnalyticsCharts(analyticsClassFilter ? analyticsClassFilter.value : '');
             // --- END: Chart Rendering ---
         });
     </script>

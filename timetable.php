@@ -367,8 +367,19 @@ $columnCount = $timetableHasTermColumn ? 4 : 3;
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        .teacher-timetable-page .main-content .container > * + * {
+            margin-top: 18px;
+        }
+        .teacher-timetable-page .card .card-header {
+            margin-bottom: 10px;
+        }
+        .teacher-timetable-page .card table {
+            margin-bottom: 0;
+        }
+    </style>
 </head>
-<body class="teacher-role">
+<body class="teacher-role teacher-timetable-page">
     <div class="dashboard">
         <div class="sidebar">
                 <h2>ICA Tracker</h2>

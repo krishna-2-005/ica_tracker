@@ -1441,7 +1441,7 @@ if ($classId) {
 								<p><?php echo $atRiskCount > 0 ? 'Check announcements.' : 'All subjects on track.'; ?></p>
 							</a>
 							<a href="view_progress.php" class="card stat-card stat-card-link secondary" title="Open Syllabus Progress">
-								<span class="stat-label">Subjects enrolled</span>
+								<span class="stat-label">Subjects</span>
 								<h3><?php echo $subjectsCount; ?></h3>
 								<p><?php echo $pendingAssignmentCount; ?> pending.</p>
 							</a>

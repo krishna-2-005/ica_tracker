@@ -501,28 +501,85 @@ $totalPlannedTillNow = $theoryPlannedTillNow + $practicalPlannedTillNow + $tutor
 $totalCompletedTillNow = $theoryCompletedTillNow + $practicalCompletedTillNow + $tutorialCompletedTillNow;
 $totalPendingTillNow = $theoryPendingTillNow + $practicalPendingTillNow + $tutorialPendingTillNow;
 
+$subjectTimelineChartData = [];
+foreach ($subjectMetrics as $metric) {
+    $subjectName = trim((string)($metric['subject_name'] ?? ''));
+    if ($subjectName === '') {
+        continue;
+    }
+
+    $subjectTheoryPlan = max(0.0, (float)$metric['theory_plan']);
+    $subjectPracticalPlan = max(0.0, (float)$metric['practical_plan']);
+    $subjectTutorialPlan = max(0.0, (float)$metric['tutorial_plan']);
+
+    $subjectTheoryActual = max(0.0, (float)$metric['theory_actual']);
+    $subjectPracticalActual = max(0.0, (float)$metric['practical_actual']);
+    $subjectTutorialActual = max(0.0, (float)$metric['tutorial_actual']);
+
+    $subjectTheoryPlannedTillNow = $subjectTheoryPlan * $timelineFactor;
+    $subjectPracticalPlannedTillNow = $subjectPracticalPlan * $timelineFactor;
+    $subjectTutorialPlannedTillNow = $subjectTutorialPlan * $timelineFactor;
+
+    $subjectTheoryCompletedTillNow = min($subjectTheoryActual, $subjectTheoryPlannedTillNow);
+    $subjectPracticalCompletedTillNow = min($subjectPracticalActual, $subjectPracticalPlannedTillNow);
+    $subjectTutorialCompletedTillNow = min($subjectTutorialActual, $subjectTutorialPlannedTillNow);
+
+    $subjectTheoryPendingTillNow = max(0.0, $subjectTheoryPlannedTillNow - $subjectTheoryCompletedTillNow);
+    $subjectPracticalPendingTillNow = max(0.0, $subjectPracticalPlannedTillNow - $subjectPracticalCompletedTillNow);
+    $subjectTutorialPendingTillNow = max(0.0, $subjectTutorialPlannedTillNow - $subjectTutorialCompletedTillNow);
+
+    $subjectTimelineChartData[$subjectName] = [
+        'completed' => [
+            round($subjectTheoryCompletedTillNow, 1),
+            round($subjectPracticalCompletedTillNow, 1),
+            round($subjectTutorialCompletedTillNow, 1),
+        ],
+        'pending' => [
+            round($subjectTheoryPendingTillNow, 1),
+            round($subjectPracticalPendingTillNow, 1),
+            round($subjectTutorialPendingTillNow, 1),
+        ],
+        'plannedTillNow' => [
+            round($subjectTheoryPlannedTillNow, 1),
+            round($subjectPracticalPlannedTillNow, 1),
+            round($subjectTutorialPlannedTillNow, 1),
+        ],
+        'actual' => [
+            round($subjectTheoryActual, 1),
+            round($subjectPracticalActual, 1),
+            round($subjectTutorialActual, 1),
+        ],
+    ];
+}
+if (!empty($subjectTimelineChartData)) {
+    ksort($subjectTimelineChartData, SORT_NATURAL | SORT_FLAG_CASE);
+}
+
 $timelineChartData = [
     'labels' => ['Theory', 'Practical', 'Tutorial'],
-    'completed' => [
-        round($theoryCompletedTillNow, 1),
-        round($practicalCompletedTillNow, 1),
-        round($tutorialCompletedTillNow, 1),
+    'overall' => [
+        'completed' => [
+            round($theoryCompletedTillNow, 1),
+            round($practicalCompletedTillNow, 1),
+            round($tutorialCompletedTillNow, 1),
+        ],
+        'pending' => [
+            round($theoryPendingTillNow, 1),
+            round($practicalPendingTillNow, 1),
+            round($tutorialPendingTillNow, 1),
+        ],
+        'plannedTillNow' => [
+            round($theoryPlannedTillNow, 1),
+            round($practicalPlannedTillNow, 1),
+            round($tutorialPlannedTillNow, 1),
+        ],
+        'actual' => [
+            round($theoryActualTotal, 1),
+            round($practicalActualTotal, 1),
+            round($tutorialActualTotal, 1),
+        ],
     ],
-    'pending' => [
-        round($theoryPendingTillNow, 1),
-        round($practicalPendingTillNow, 1),
-        round($tutorialPendingTillNow, 1),
-    ],
-    'plannedTillNow' => [
-        round($theoryPlannedTillNow, 1),
-        round($practicalPlannedTillNow, 1),
-        round($tutorialPlannedTillNow, 1),
-    ],
-    'actual' => [
-        round($theoryActualTotal, 1),
-        round($practicalActualTotal, 1),
-        round($tutorialActualTotal, 1),
-    ],
+    'subjects' => $subjectTimelineChartData,
 ];
 
 if ($stmtStudent) {
@@ -544,9 +601,47 @@ mysqli_close($conn);
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 .timeline-note {
-    margin-top: 4px;
+    margin-top: 6px;
     color: #63666A;
     font-size: 0.9rem;
+}
+.view-progress-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+.view-progress-topbar-info {
+    min-width: 0;
+}
+.view-progress-topbar-info h2 {
+    margin: 0;
+    line-height: 1.2;
+    font-size: 1.6rem;
+    color: #A6192E;
+    font-weight: 600;
+}
+.view-progress-topbar-info p {
+    margin: 6px 0 0;
+    color: #63666A;
+    font-size: 0.9rem;
+}
+.view-progress-topbar-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+.view-progress-topbar-logo {
+    width: 170px;
+    height: 56px;
+    background: url('nmimshorizontal.jpg') center/contain no-repeat;
+    flex-shrink: 0;
 }
 .timeline-card-grid {
     display: grid;
@@ -554,10 +649,15 @@ mysqli_close($conn);
     gap: 12px;
     margin-bottom: 16px;
 }
+.timeline-card-grid .stat-card {
+    min-height: 106px;
+}
 .timeline-stat-value {
     font-size: 1.4rem;
     font-weight: 700;
     color: #1f2d3d;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
 }
 .timeline-stat-sub {
     margin-top: 4px;
@@ -570,6 +670,72 @@ mysqli_close($conn);
     justify-content: space-between;
     gap: 10px;
     margin-bottom: 6px;
+}
+.chart-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+.chart-filter-top {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.chart-filter-label {
+    color: #63666A;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+.chart-subject-list {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 620px;
+}
+.chart-subject-list-label {
+    color: #63666A;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.chart-subject-chip {
+    border: 1px solid rgba(99, 102, 106, 0.28);
+    background: rgba(99, 102, 106, 0.1);
+    color: #2c3e50;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.76rem;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.chart-subject-chip:hover,
+.chart-subject-chip:focus-visible {
+    border-color: rgba(166, 25, 46, 0.35);
+    background: rgba(166, 25, 46, 0.09);
+    color: #A6192E;
+    outline: none;
+}
+.chart-subject-chip.active {
+    border-color: rgba(166, 25, 46, 0.42);
+    background: rgba(166, 25, 46, 0.16);
+    color: #A6192E;
+}
+.chart-filter-select {
+    min-width: 190px;
+    max-width: 280px;
+    width: auto;
+    margin: 0;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(99, 102, 106, 0.45);
+    background: #fff;
+    color: #2c3e50;
+    font-size: 0.85rem;
 }
 .chart-container {
     height: 280px;
@@ -588,6 +754,45 @@ mysqli_close($conn);
     font-size: 0.85rem;
     color: #2c3e50;
 }
+@media (max-width: 768px) {
+    .view-progress-topbar {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    .view-progress-topbar-side {
+        align-items: flex-start;
+    }
+    .view-progress-topbar-logo {
+        width: 125px;
+        height: 42px;
+    }
+    .chart-header-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+    .chart-controls {
+        width: 100%;
+        align-items: flex-start;
+    }
+    .chart-filter-top {
+        width: 100%;
+        justify-content: flex-start;
+    }
+    .chart-subject-list {
+        max-width: 100%;
+        justify-content: flex-start;
+    }
+    .chart-subject-list-label {
+        width: 100%;
+    }
+    .chart-filter-select {
+        min-width: 0;
+        width: 100%;
+    }
+    .timeline-card-grid .stat-card {
+        min-height: 0;
+    }
+}
 </style>
 </head>
 <body>
@@ -604,16 +809,19 @@ mysqli_close($conn);
 <a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
 </div>
 <div class="main-content">
-<div class="header">
-<div>
+<div class="view-progress-topbar">
+<div class="view-progress-topbar-info">
 <h2>Syllabus Progress</h2>
 <p><?php echo htmlspecialchars($termHeadline); ?></p>
 <p class="timeline-note"><?php echo htmlspecialchars($termDateLine); ?></p>
 <p class="timeline-note">Viewing current semester timeline</p>
 </div>
+<div class="view-progress-topbar-side">
 <?php if ($lastProgressUpdate): ?>
 <span class="tag">Last update: <?php echo date('d M Y', $lastProgressUpdate); ?></span>
 <?php endif; ?>
+<span class="view-progress-topbar-logo" aria-hidden="true"></span>
+</div>
 </div>
 <div class="container">
 <div class="timeline-card-grid">
@@ -642,16 +850,35 @@ mysqli_close($conn);
 <div class="card">
 <div class="chart-header-row">
 <h3 class="section-title" style="margin-bottom:0;">Theory, Practical, Tutorial: Till-Now Progress</h3>
+<div class="chart-controls">
+<div class="chart-filter-top">
+<label for="timelineSubjectFilter" class="chart-filter-label">Subject:</label>
+<select id="timelineSubjectFilter" class="chart-filter-select" aria-label="Filter timeline chart by subject">
+<option value="__all__">All subjects</option>
+<?php foreach ($subjectTimelineChartData as $subjectName => $subjectSeries): ?>
+<option value="<?php echo htmlspecialchars($subjectName); ?>"><?php echo htmlspecialchars($subjectName); ?></option>
+<?php endforeach; ?>
+</select>
 <span class="tag">Current timeline only</span>
+</div>
+<?php if (!empty($subjectTimelineChartData)): ?>
+<div class="chart-subject-list" aria-label="Subjects in current semester">
+<span class="chart-subject-list-label">Subjects in this semester:</span>
+<?php foreach ($subjectTimelineChartData as $subjectName => $subjectSeries): ?>
+<button type="button" class="chart-subject-chip" data-subject-chip="<?php echo htmlspecialchars($subjectName); ?>"><?php echo htmlspecialchars($subjectName); ?></button>
+<?php endforeach; ?>
+</div>
+<?php endif; ?>
+</div>
 </div>
 <p class="text-muted">Stacked view of completed vs pending hours as of today based on active semester dates.</p>
 <div class="chart-container">
 <canvas id="timelineProgressChart"></canvas>
 </div>
 <div class="chart-summary-row">
-<div class="chart-summary-pill"><strong>Theory:</strong> <?php echo number_format($theoryCompletedTillNow, 1); ?> / <?php echo number_format($theoryPlannedTillNow, 1); ?> hrs</div>
-<div class="chart-summary-pill"><strong>Practical:</strong> <?php echo number_format($practicalCompletedTillNow, 1); ?> / <?php echo number_format($practicalPlannedTillNow, 1); ?> hrs</div>
-<div class="chart-summary-pill"><strong>Tutorial:</strong> <?php echo number_format($tutorialCompletedTillNow, 1); ?> / <?php echo number_format($tutorialPlannedTillNow, 1); ?> hrs</div>
+<div class="chart-summary-pill"><strong>Theory:</strong> <span id="summaryTheoryDone"><?php echo number_format($theoryCompletedTillNow, 1); ?></span> / <span id="summaryTheoryPlan"><?php echo number_format($theoryPlannedTillNow, 1); ?></span> hrs</div>
+<div class="chart-summary-pill"><strong>Practical:</strong> <span id="summaryPracticalDone"><?php echo number_format($practicalCompletedTillNow, 1); ?></span> / <span id="summaryPracticalPlan"><?php echo number_format($practicalPlannedTillNow, 1); ?></span> hrs</div>
+<div class="chart-summary-pill"><strong>Tutorial:</strong> <span id="summaryTutorialDone"><?php echo number_format($tutorialCompletedTillNow, 1); ?></span> / <span id="summaryTutorialPlan"><?php echo number_format($tutorialPlannedTillNow, 1); ?></span> hrs</div>
 </div>
 </div>
 
@@ -749,22 +976,58 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
     }
 
     const timelineData = <?php echo json_encode($timelineChartData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    const subjectFilter = document.getElementById('timelineSubjectFilter');
+    const summaryTheoryDone = document.getElementById('summaryTheoryDone');
+    const summaryTheoryPlan = document.getElementById('summaryTheoryPlan');
+    const summaryPracticalDone = document.getElementById('summaryPracticalDone');
+    const summaryPracticalPlan = document.getElementById('summaryPracticalPlan');
+    const summaryTutorialDone = document.getElementById('summaryTutorialDone');
+    const summaryTutorialPlan = document.getElementById('summaryTutorialPlan');
+    const subjectChips = Array.prototype.slice.call(document.querySelectorAll('[data-subject-chip]'));
 
-    new Chart(canvas, {
+    const getSeriesForSubject = function (subjectKey) {
+        if (subjectKey && subjectKey !== '__all__' && timelineData.subjects && timelineData.subjects[subjectKey]) {
+            return timelineData.subjects[subjectKey];
+        }
+        return timelineData.overall;
+    };
+
+    const formatHours = function (value) {
+        const normalized = Number(value);
+        if (!Number.isFinite(normalized)) {
+            return '0.0';
+        }
+        return normalized.toFixed(1);
+    };
+
+    const syncSubjectChipState = function (subjectKey) {
+        if (!subjectChips.length) {
+            return;
+        }
+        subjectChips.forEach(function (chip) {
+            const chipSubject = chip.getAttribute('data-subject-chip') || '';
+            chip.classList.toggle('active', subjectKey !== '__all__' && chipSubject === subjectKey);
+        });
+    };
+
+    let activeSubjectKey = subjectFilter ? subjectFilter.value : '__all__';
+    let activeSeries = getSeriesForSubject(activeSubjectKey);
+
+    const timelineChart = new Chart(canvas, {
         type: 'bar',
         data: {
             labels: timelineData.labels,
             datasets: [
                 {
                     label: 'Completed till now',
-                    data: timelineData.completed,
+                    data: activeSeries.completed,
                     backgroundColor: '#2e8b57',
                     borderRadius: 4,
                     barThickness: 28
                 },
                 {
                     label: 'Pending till now',
-                    data: timelineData.pending,
+                    data: activeSeries.pending,
                     backgroundColor: '#A6192E',
                     borderRadius: 4,
                     barThickness: 28
@@ -799,8 +1062,8 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
                                 return '';
                             }
                             const idx = items[0].dataIndex;
-                            const planned = timelineData.plannedTillNow[idx] ?? 0;
-                            const actual = timelineData.actual[idx] ?? 0;
+                            const planned = activeSeries.plannedTillNow[idx] ?? 0;
+                            const actual = activeSeries.actual[idx] ?? 0;
                             return [
                                 'Planned till now: ' + planned + ' hrs',
                                 'Actual logged: ' + actual + ' hrs'
@@ -811,6 +1074,53 @@ $statusClass = $pct < 50 ? 'status-pill pending' : 'status-pill success';
             }
         }
     });
+
+    const applySeries = function (series, subjectKey) {
+        activeSeries = series;
+        timelineChart.data.datasets[0].data = series.completed;
+        timelineChart.data.datasets[1].data = series.pending;
+        timelineChart.update();
+        syncSubjectChipState(subjectKey || '__all__');
+
+        if (summaryTheoryDone) {
+            summaryTheoryDone.textContent = formatHours(series.completed[0] ?? 0);
+        }
+        if (summaryTheoryPlan) {
+            summaryTheoryPlan.textContent = formatHours(series.plannedTillNow[0] ?? 0);
+        }
+        if (summaryPracticalDone) {
+            summaryPracticalDone.textContent = formatHours(series.completed[1] ?? 0);
+        }
+        if (summaryPracticalPlan) {
+            summaryPracticalPlan.textContent = formatHours(series.plannedTillNow[1] ?? 0);
+        }
+        if (summaryTutorialDone) {
+            summaryTutorialDone.textContent = formatHours(series.completed[2] ?? 0);
+        }
+        if (summaryTutorialPlan) {
+            summaryTutorialPlan.textContent = formatHours(series.plannedTillNow[2] ?? 0);
+        }
+    };
+
+    if (subjectFilter) {
+        subjectFilter.addEventListener('change', function () {
+            activeSubjectKey = this.value || '__all__';
+            applySeries(getSeriesForSubject(activeSubjectKey), activeSubjectKey);
+        });
+    }
+
+    if (subjectFilter && subjectChips.length) {
+        subjectChips.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                const chipSubject = this.getAttribute('data-subject-chip') || '__all__';
+                subjectFilter.value = chipSubject;
+                activeSubjectKey = chipSubject;
+                applySeries(getSeriesForSubject(activeSubjectKey), activeSubjectKey);
+            });
+        });
+    }
+
+    applySeries(activeSeries, activeSubjectKey);
 })();
 </script>
 </body>

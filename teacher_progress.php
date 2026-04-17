@@ -60,6 +60,61 @@ if (!function_exists('normalize_elective_short_label')) {
     }
 }
 
+if (!function_exists('teacher_status_meta')) {
+    function teacher_status_meta(float $avgCompletion, float $evaluationCoverage, ?string $lastUpdate): array
+    {
+        $lastUpdateText = trim((string)$lastUpdate);
+        if ($lastUpdateText === '') {
+            return [
+                'code' => 'no_updates',
+                'label' => 'No Updates',
+                'class' => 'badge-neutral',
+            ];
+        }
+
+        if ($avgCompletion >= 85 && $evaluationCoverage >= 70) {
+            return [
+                'code' => 'on_track',
+                'label' => 'On Track',
+                'class' => 'badge-success',
+            ];
+        }
+
+        if ($avgCompletion >= 70) {
+            return [
+                'code' => 'slight_delay',
+                'label' => 'Slight Delay',
+                'class' => 'badge-warning',
+            ];
+        }
+
+        if ($avgCompletion >= 50) {
+            return [
+                'code' => 'behind',
+                'label' => 'Behind',
+                'class' => 'badge-orange',
+            ];
+        }
+
+        return [
+            'code' => 'critical_delay',
+            'label' => 'Critical Delay',
+            'class' => 'badge-danger',
+        ];
+    }
+}
+
+if (!function_exists('teacher_compliance_score')) {
+    function teacher_compliance_score(float $avgCompletion, float $evaluationCoverage, int $pendingAlerts, int $resolvedAlerts): float
+    {
+        $totalAlerts = $pendingAlerts + $resolvedAlerts;
+        $alertResponsiveness = $totalAlerts > 0 ? (($resolvedAlerts / $totalAlerts) * 100) : 100;
+        $score = ($avgCompletion * 0.45) + ($evaluationCoverage * 0.35) + ($alertResponsiveness * 0.20);
+        $score = max(0, min(100, $score));
+        return round($score, 1);
+    }
+}
+
 $class_has_school = columnExists($conn, 'classes', 'school');
 $class_has_department = columnExists($conn, 'classes', 'department');
 
@@ -177,6 +232,8 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
     $detail_school_filter = (isset($_GET['school']) && $_GET['school'] !== '') ? trim($_GET['school']) : '';
     $detail_semester_filter = (isset($_GET['semester_filter']) && $_GET['semester_filter'] !== '') ? (int)$_GET['semester_filter'] : null;
     $detail_class_filter = (isset($_GET['class_filter']) && $_GET['class_filter'] !== '') ? (int)$_GET['class_filter'] : null;
+    $detail_course_filter = (isset($_GET['course_filter']) && $_GET['course_filter'] !== '') ? (int)$_GET['course_filter'] : null;
+    $detailMarksDateClause = $buildDateAnd('ism.updated_at');
 
     // Course-specific data sourced from teacher_subject_assignments
     $courses_sql = "
@@ -226,6 +283,11 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
         $courses_sql .= " AND c.id = ?";
         $course_types .= 'i';
         $course_params[] = $detail_class_filter;
+    }
+    if ($detail_course_filter !== null) {
+        $courses_sql .= " AND s.id = ?";
+        $course_types .= 'i';
+        $course_params[] = $detail_course_filter;
     }
 
     if ($activeTermId > 0) {
@@ -317,6 +379,11 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
         $filtered_taught_types .= 'i';
         $filtered_taught_params[] = $detail_class_filter;
     }
+    if ($detail_course_filter !== null) {
+        $filtered_taught_subquery .= " AND tsa.subject_id = ?";
+        $filtered_taught_types .= 'i';
+        $filtered_taught_params[] = $detail_course_filter;
+    }
 
     if ($activeTermId > 0) {
         $termId = (int)$activeTermId;
@@ -364,11 +431,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
         FROM (
             SELECT
                 st.id AS student_id,
-                SUM(ism.marks) AS student_total,
-                SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END) AS student_possible,
+                SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END) AS student_total,
+                SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) AS student_possible,
                 CASE
-                    WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END) > 0
-                        THEN (SUM(ism.marks) / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END)) * 100
+                    WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) > 0
+                        THEN (
+                            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END)
+                            / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END)
+                        ) * 100
                     ELSE NULL
                 END AS student_percentage
             FROM (
@@ -378,7 +448,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
                 AND (taught.section_key = 0 OR COALESCE(st.section_id, 0) = taught.section_key)
             LEFT JOIN ica_student_marks ism ON ism.teacher_id = taught.teacher_id
                 AND ism.student_id = st.id
-                AND ism.marks IS NOT NULL
+                AND ism.marks IS NOT NULL{$detailMarksDateClause}
             LEFT JOIN ica_components ic ON ic.id = ism.component_id
             GROUP BY st.id
         ) student_stats";
@@ -415,11 +485,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
         SELECT
             st.sap_id,
             st.name AS student_name,
-            SUM(ism.marks) AS marks_obtained,
-            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END) AS marks_total,
+            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END) AS marks_obtained,
+            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) AS marks_total,
             CASE
-                WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END) > 0
-                    THEN (SUM(ism.marks) / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 THEN ic.marks_per_instance ELSE 0 END)) * 100
+                WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) > 0
+                    THEN (
+                        SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END)
+                        / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END)
+                    ) * 100
                 ELSE NULL
             END AS performance_pct
         FROM (
@@ -429,7 +502,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
             AND (taught.section_key = 0 OR COALESCE(st.section_id, 0) = taught.section_key)
         LEFT JOIN ica_student_marks ism ON ism.teacher_id = taught.teacher_id
             AND ism.student_id = st.id
-            AND ism.marks IS NOT NULL
+            AND ism.marks IS NOT NULL{$detailMarksDateClause}
         LEFT JOIN ica_components ic ON ic.id = ism.component_id
         GROUP BY st.id, st.sap_id, st.name
         HAVING marks_total > 0
@@ -458,15 +531,442 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_teacher_details') {
                     'performance_pct' => isset($row['performance_pct']) ? round((float)$row['performance_pct'], 2) : null
                 ];
             }
+            mysqli_free_result($top_result);
         }
         mysqli_stmt_close($stmt_top);
     }
-    
+
+    // Students below performance threshold
+    $weak_students_sql = "
+        SELECT
+            st.sap_id,
+            st.name AS student_name,
+            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END) AS marks_obtained,
+            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) AS marks_total,
+            CASE
+                WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) > 0
+                    THEN (
+                        SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END)
+                        / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END)
+                    ) * 100
+                ELSE NULL
+            END AS performance_pct
+        FROM (
+            $filtered_taught_subquery
+        ) taught
+        JOIN students st ON st.class_id = taught.class_id
+            AND (taught.section_key = 0 OR COALESCE(st.section_id, 0) = taught.section_key)
+        LEFT JOIN ica_student_marks ism ON ism.teacher_id = taught.teacher_id
+            AND ism.student_id = st.id
+            AND ism.marks IS NOT NULL{$detailMarksDateClause}
+        LEFT JOIN ica_components ic ON ic.id = ism.component_id
+        GROUP BY st.id, st.sap_id, st.name
+        HAVING marks_total > 0 AND performance_pct < ?
+        ORDER BY performance_pct ASC
+        LIMIT 10";
+    $stmt_weak = mysqli_prepare($conn, $weak_students_sql);
+    $weak_students = [];
+    if ($stmt_weak) {
+        $weak_bind_types = $filtered_taught_types . 'd';
+        $weak_bind_params = $filtered_taught_params;
+        $weak_bind_params[] = (float)$performance_threshold;
+        $weakBindArgs = [];
+        foreach ($weak_bind_params as $idx => $value) {
+            $weakBindArgs[$idx] = &$weak_bind_params[$idx];
+        }
+        array_unshift($weakBindArgs, $stmt_weak, $weak_bind_types);
+        call_user_func_array('mysqli_stmt_bind_param', $weakBindArgs);
+        mysqli_stmt_execute($stmt_weak);
+        $weak_result = mysqli_stmt_get_result($stmt_weak);
+        if ($weak_result) {
+            while ($row = mysqli_fetch_assoc($weak_result)) {
+                $weak_students[] = [
+                    'sap_id' => $row['sap_id'] ?? '',
+                    'student_name' => $row['student_name'] ?? '',
+                    'marks_obtained' => round((float)($row['marks_obtained'] ?? 0), 2),
+                    'marks_total' => round((float)($row['marks_total'] ?? 0), 2),
+                    'performance_pct' => isset($row['performance_pct']) ? round((float)$row['performance_pct'], 2) : null
+                ];
+            }
+            mysqli_free_result($weak_result);
+        }
+        mysqli_stmt_close($stmt_weak);
+    }
+
+    // Course-wise evaluation coverage and average performance
+    $course_coverage = [];
+    $course_performance_map = [];
+    $low_performing_courses = [];
+
+    $coverage_sql = "
+        SELECT
+            s.subject_name,
+            COALESCE(NULLIF(s.short_name, ''), s.subject_name) AS subject_display,
+            c.class_name,
+            c.semester,
+            c.school,
+            COALESCE(sec.section_name, '') AS section_name,
+            COUNT(DISTINCT st.id) AS total_students,
+            COUNT(DISTINCT CASE WHEN score.student_possible > 0 THEN st.id END) AS evaluated_students,
+            AVG(CASE WHEN score.student_possible > 0 THEN score.student_percentage END) AS avg_performance_pct
+        FROM teacher_subject_assignments tsa
+        JOIN subjects s ON s.id = tsa.subject_id
+        JOIN classes c ON c.id = tsa.class_id
+        LEFT JOIN sections sec ON sec.id = tsa.section_id
+        LEFT JOIN students st ON st.class_id = tsa.class_id
+            AND (COALESCE(tsa.section_id, 0) = 0 OR COALESCE(st.section_id, 0) = COALESCE(tsa.section_id, 0))
+        LEFT JOIN (
+            SELECT
+                ism.teacher_id,
+                ism.student_id,
+                SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END) AS student_total,
+                SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) AS student_possible,
+                CASE
+                    WHEN SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END) > 0
+                        THEN (
+                            SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ism.marks ELSE 0 END)
+                            / SUM(CASE WHEN ic.marks_per_instance IS NOT NULL AND ic.marks_per_instance > 0 AND ism.marks IS NOT NULL THEN ic.marks_per_instance ELSE 0 END)
+                        ) * 100
+                    ELSE NULL
+                END AS student_percentage
+            FROM ica_student_marks ism
+            LEFT JOIN ica_components ic ON ic.id = ism.component_id
+            WHERE ism.teacher_id = ? AND ism.marks IS NOT NULL{$detailMarksDateClause}
+            GROUP BY ism.teacher_id, ism.student_id
+        ) score ON score.teacher_id = tsa.teacher_id AND score.student_id = st.id
+        WHERE tsa.teacher_id = ?";
+
+    $coverage_types = 'ii';
+    $coverage_params = [$teacher_id, $teacher_id];
+    if ($detail_school_filter !== '') {
+        $coverage_school_clauses = [];
+        if ($class_has_school) {
+            $coverage_school_clauses[] = 'c.school = ?';
+            $coverage_types .= 's';
+            $coverage_params[] = $detail_school_filter;
+        }
+        if ($class_has_department) {
+            if ($class_has_school) {
+                $coverage_school_clauses[] = "((c.school IS NULL OR c.school = '') AND c.department = ?)";
+            } else {
+                $coverage_school_clauses[] = 'c.department = ?';
+            }
+            $coverage_types .= 's';
+            $coverage_params[] = $detail_school_filter;
+        }
+        if (!empty($coverage_school_clauses)) {
+            $coverage_sql .= ' AND (' . implode(' OR ', $coverage_school_clauses) . ')';
+        }
+    }
+    if ($detail_semester_filter !== null) {
+        $coverage_sql .= " AND c.semester = ?";
+        $coverage_types .= 's';
+        $coverage_params[] = (string)$detail_semester_filter;
+    }
+    if ($detail_class_filter !== null) {
+        $coverage_sql .= " AND c.id = ?";
+        $coverage_types .= 'i';
+        $coverage_params[] = $detail_class_filter;
+    }
+    if ($detail_course_filter !== null) {
+        $coverage_sql .= " AND s.id = ?";
+        $coverage_types .= 'i';
+        $coverage_params[] = $detail_course_filter;
+    }
+    if ($activeTermId > 0) {
+        $termId = (int)$activeTermId;
+        $coverage_sql .= " AND (c.academic_term_id = {$termId} OR c.academic_term_id IS NULL)";
+    }
+
+    $coverage_sql .= "
+        GROUP BY s.id, c.id, sec.section_name
+        ORDER BY subject_display, c.class_name, sec.section_name";
+
+    $stmt_coverage = mysqli_prepare($conn, $coverage_sql);
+    if ($stmt_coverage) {
+        $coverageBindArgs = [];
+        foreach ($coverage_params as $idx => $value) {
+            $coverageBindArgs[$idx] = &$coverage_params[$idx];
+        }
+        array_unshift($coverageBindArgs, $stmt_coverage, $coverage_types);
+        call_user_func_array('mysqli_stmt_bind_param', $coverageBindArgs);
+        mysqli_stmt_execute($stmt_coverage);
+        $coverage_result = mysqli_stmt_get_result($stmt_coverage);
+        if ($coverage_result) {
+            while ($coverage_row = mysqli_fetch_assoc($coverage_result)) {
+                $classLabel = format_class_label(
+                    normalize_elective_short_label($coverage_row['class_name'] ?? ''),
+                    $coverage_row['section_name'] ?? '',
+                    $coverage_row['semester'] ?? '',
+                    $coverage_row['school'] ?? ''
+                );
+                if ($classLabel === '') {
+                    $classLabel = trim((string)($coverage_row['class_name'] ?? ''));
+                }
+                if ($classLabel === '') {
+                    $classLabel = 'UNASSIGNED';
+                }
+
+                $subjectDisplay = normalize_elective_short_label($coverage_row['subject_display'] ?? $coverage_row['subject_name'] ?? '');
+                $totalStudents = (int)($coverage_row['total_students'] ?? 0);
+                $evaluatedStudents = (int)($coverage_row['evaluated_students'] ?? 0);
+                $coveragePct = $totalStudents > 0 ? round(($evaluatedStudents / $totalStudents) * 100, 1) : 0.0;
+                $avgPerf = isset($coverage_row['avg_performance_pct']) ? (float)$coverage_row['avg_performance_pct'] : null;
+
+                $course_coverage[] = [
+                    'subject_name' => $subjectDisplay,
+                    'class_label' => $classLabel,
+                    'total_students' => $totalStudents,
+                    'evaluated_students' => $evaluatedStudents,
+                    'coverage_pct' => $coveragePct,
+                    'avg_performance_pct' => $avgPerf !== null ? round($avgPerf, 2) : null
+                ];
+
+                if (!isset($course_performance_map[$subjectDisplay])) {
+                    $course_performance_map[$subjectDisplay] = [];
+                }
+                if ($avgPerf !== null) {
+                    $course_performance_map[$subjectDisplay][] = $avgPerf;
+                }
+
+                if ($avgPerf !== null && $avgPerf + 0.0001 < (float)$performance_threshold) {
+                    $low_performing_courses[] = [
+                        'subject_name' => $subjectDisplay,
+                        'class_label' => $classLabel,
+                        'avg_performance_pct' => round($avgPerf, 2),
+                        'coverage_pct' => $coveragePct
+                    ];
+                }
+            }
+            mysqli_free_result($coverage_result);
+        }
+        mysqli_stmt_close($stmt_coverage);
+    }
+
+    $course_performance = [];
+    foreach ($course_performance_map as $subjectName => $coursePerfList) {
+        if (empty($coursePerfList)) {
+            continue;
+        }
+        $course_performance[] = [
+            'subject_name' => $subjectName,
+            'avg_performance_pct' => round(array_sum($coursePerfList) / count($coursePerfList), 2)
+        ];
+    }
+    usort($course_performance, static function (array $a, array $b): int {
+        return ($b['avg_performance_pct'] <=> $a['avg_performance_pct']);
+    });
+    usort($low_performing_courses, static function (array $a, array $b): int {
+        return ($a['avg_performance_pct'] <=> $b['avg_performance_pct']);
+    });
+
+    // Syllabus planned vs actual and progress timeline
+    $progress_sql = "
+        SELECT
+            sp.subject,
+            sp.timeline,
+            sp.completion_percentage,
+            sp.planned_hours,
+            sp.actual_hours,
+            sp.updated_at,
+            c.class_name,
+            c.semester,
+            c.school,
+            COALESCE(sec.section_name, '') AS section_name,
+            sp.class_label
+        FROM syllabus_progress sp
+        LEFT JOIN classes c ON c.id = sp.class_id
+        LEFT JOIN sections sec ON sec.id = sp.section_id
+        WHERE sp.teacher_id = ?";
+    $progress_types = 'i';
+    $progress_params = [$teacher_id];
+
+    if ($termStartBound && $termEndBound) {
+        $startEsc = mysqli_real_escape_string($conn, $termStartBound);
+        $endEsc = mysqli_real_escape_string($conn, $termEndBound);
+        $progress_sql .= " AND sp.updated_at BETWEEN '{$startEsc}' AND '{$endEsc}'";
+    }
+    if ($detail_school_filter !== '') {
+        $progress_school_clauses = [];
+        if ($class_has_school) {
+            $progress_school_clauses[] = 'c.school = ?';
+            $progress_types .= 's';
+            $progress_params[] = $detail_school_filter;
+        }
+        if ($class_has_department) {
+            if ($class_has_school) {
+                $progress_school_clauses[] = "((c.school IS NULL OR c.school = '') AND c.department = ?)";
+            } else {
+                $progress_school_clauses[] = 'c.department = ?';
+            }
+            $progress_types .= 's';
+            $progress_params[] = $detail_school_filter;
+        }
+        if (!empty($progress_school_clauses)) {
+            $progress_sql .= ' AND (' . implode(' OR ', $progress_school_clauses) . ')';
+        }
+    }
+    if ($detail_semester_filter !== null) {
+        $progress_sql .= " AND c.semester = ?";
+        $progress_types .= 's';
+        $progress_params[] = (string)$detail_semester_filter;
+    }
+    if ($detail_class_filter !== null) {
+        $progress_sql .= " AND sp.class_id = ?";
+        $progress_types .= 'i';
+        $progress_params[] = $detail_class_filter;
+    }
+    if ($detail_course_filter !== null) {
+        $progress_sql .= " AND EXISTS (SELECT 1 FROM subjects s_prog WHERE s_prog.id = ? AND s_prog.subject_name = sp.subject)";
+        $progress_types .= 'i';
+        $progress_params[] = $detail_course_filter;
+    }
+    if ($activeTermId > 0) {
+        $termId = (int)$activeTermId;
+        $progress_sql .= " AND (c.id IS NULL OR c.academic_term_id = {$termId} OR c.academic_term_id IS NULL)";
+    }
+    $progress_sql .= " ORDER BY sp.updated_at DESC LIMIT 40";
+
+    $syllabus_plan_actual_map = [];
+    $recent_progress_updates = [];
+    $stmt_progress = mysqli_prepare($conn, $progress_sql);
+    if ($stmt_progress) {
+        $progressBindArgs = [];
+        foreach ($progress_params as $idx => $value) {
+            $progressBindArgs[$idx] = &$progress_params[$idx];
+        }
+        array_unshift($progressBindArgs, $stmt_progress, $progress_types);
+        call_user_func_array('mysqli_stmt_bind_param', $progressBindArgs);
+        mysqli_stmt_execute($stmt_progress);
+        $progress_result = mysqli_stmt_get_result($stmt_progress);
+        if ($progress_result) {
+            while ($progress_row = mysqli_fetch_assoc($progress_result)) {
+                $subjectName = normalize_elective_short_label($progress_row['subject'] ?? '');
+                $classLabel = format_class_label(
+                    normalize_elective_short_label($progress_row['class_name'] ?? ''),
+                    $progress_row['section_name'] ?? '',
+                    $progress_row['semester'] ?? '',
+                    $progress_row['school'] ?? ''
+                );
+                if ($classLabel === '') {
+                    $classLabel = trim((string)($progress_row['class_label'] ?? ''));
+                }
+                if ($classLabel === '') {
+                    $classLabel = 'UNASSIGNED';
+                }
+
+                $plannedHours = isset($progress_row['planned_hours']) ? (float)$progress_row['planned_hours'] : 0.0;
+                $actualHours = isset($progress_row['actual_hours']) ? (float)$progress_row['actual_hours'] : 0.0;
+                $completionPct = isset($progress_row['completion_percentage']) ? (float)$progress_row['completion_percentage'] : 0.0;
+                $updatedAt = isset($progress_row['updated_at']) ? trim((string)$progress_row['updated_at']) : '';
+
+                $recent_progress_updates[] = [
+                    'subject_name' => $subjectName,
+                    'class_label' => $classLabel,
+                    'timeline' => $progress_row['timeline'] ?? '',
+                    'completion_pct' => round($completionPct, 2),
+                    'planned_hours' => round($plannedHours, 2),
+                    'actual_hours' => round($actualHours, 2),
+                    'updated_at' => $updatedAt !== '' ? date('d M Y, h:i A', strtotime($updatedAt)) : '—'
+                ];
+
+                $planKey = $subjectName . '|' . $classLabel;
+                if (!isset($syllabus_plan_actual_map[$planKey])) {
+                    $syllabus_plan_actual_map[$planKey] = [
+                        'subject_name' => $subjectName,
+                        'class_label' => $classLabel,
+                        'planned_hours' => round($plannedHours, 2),
+                        'actual_hours' => round($actualHours, 2),
+                        'completion_pct' => round($completionPct, 2),
+                        'variance_hours' => round($actualHours - $plannedHours, 2),
+                        'updated_at' => $updatedAt !== '' ? date('d M Y, h:i A', strtotime($updatedAt)) : '—'
+                    ];
+                }
+            }
+            mysqli_free_result($progress_result);
+        }
+        mysqli_stmt_close($stmt_progress);
+    }
+    $recent_progress_updates = array_slice($recent_progress_updates, 0, 10);
+    $syllabus_plan_actual = array_values($syllabus_plan_actual_map);
+
+    // Alert intervention detail
+    $unresolved_alerts = [];
+    $unresolved_sql = "SELECT message, status, created_at
+        FROM alerts
+        WHERE teacher_id = ?
+          AND LOWER(status) IN ('pending', 'open', 'active', 'escalated')";
+    if ($termStartBound && $termEndBound) {
+        $startEsc = mysqli_real_escape_string($conn, $termStartBound);
+        $endEsc = mysqli_real_escape_string($conn, $termEndBound);
+        $unresolved_sql .= " AND created_at BETWEEN '{$startEsc}' AND '{$endEsc}'";
+    }
+    $unresolved_sql .= " ORDER BY created_at DESC LIMIT 8";
+    $stmt_unresolved = mysqli_prepare($conn, $unresolved_sql);
+    if ($stmt_unresolved) {
+        mysqli_stmt_bind_param($stmt_unresolved, 'i', $teacher_id);
+        mysqli_stmt_execute($stmt_unresolved);
+        $unresolved_result = mysqli_stmt_get_result($stmt_unresolved);
+        if ($unresolved_result) {
+            while ($row = mysqli_fetch_assoc($unresolved_result)) {
+                $unresolved_alerts[] = [
+                    'message' => $row['message'] ?? '',
+                    'status' => $row['status'] ?? '',
+                    'created_at' => !empty($row['created_at']) ? date('d M Y, h:i A', strtotime((string)$row['created_at'])) : '—'
+                ];
+            }
+            mysqli_free_result($unresolved_result);
+        }
+        mysqli_stmt_close($stmt_unresolved);
+    }
+
+    $response_history = [];
+    $response_sql = "SELECT message, response, status, created_at, responded_at
+        FROM alerts
+        WHERE teacher_id = ?
+          AND (
+            (response IS NOT NULL AND TRIM(response) <> '')
+            OR LOWER(status) IN ('responded', 'resolved', 'closed', 'acknowledged', 'completed')
+          )";
+    if ($termStartBound && $termEndBound) {
+        $startEsc = mysqli_real_escape_string($conn, $termStartBound);
+        $endEsc = mysqli_real_escape_string($conn, $termEndBound);
+        $response_sql .= " AND created_at BETWEEN '{$startEsc}' AND '{$endEsc}'";
+    }
+    $response_sql .= " ORDER BY COALESCE(responded_at, created_at) DESC LIMIT 10";
+    $stmt_response = mysqli_prepare($conn, $response_sql);
+    if ($stmt_response) {
+        mysqli_stmt_bind_param($stmt_response, 'i', $teacher_id);
+        mysqli_stmt_execute($stmt_response);
+        $response_result = mysqli_stmt_get_result($stmt_response);
+        if ($response_result) {
+            while ($row = mysqli_fetch_assoc($response_result)) {
+                $response_history[] = [
+                    'message' => $row['message'] ?? '',
+                    'response' => $row['response'] ?? '',
+                    'status' => $row['status'] ?? '',
+                    'created_at' => !empty($row['created_at']) ? date('d M Y, h:i A', strtotime((string)$row['created_at'])) : '—',
+                    'responded_at' => !empty($row['responded_at']) ? date('d M Y, h:i A', strtotime((string)$row['responded_at'])) : '—'
+                ];
+            }
+            mysqli_free_result($response_result);
+        }
+        mysqli_stmt_close($stmt_response);
+    }
+
     echo json_encode([
         'courses' => $courses_data,
         'alerts' => $alerts_data,
         'student_summary' => $student_summary,
         'top_students' => $top_students,
+        'weak_students' => $weak_students,
+        'course_coverage' => $course_coverage,
+        'course_performance' => $course_performance,
+        'low_performing_courses' => $low_performing_courses,
+        'syllabus_plan_actual' => $syllabus_plan_actual,
+        'recent_progress_updates' => $recent_progress_updates,
+        'unresolved_alerts' => $unresolved_alerts,
+        'response_history' => $response_history,
         'thresholds' => [
             'performance' => $performance_threshold
         ]
@@ -506,6 +1006,7 @@ if ($semester_param_provided) {
     }
 }
 $class_filter = (isset($_GET['class_filter']) && $_GET['class_filter'] !== '') ? (int)$_GET['class_filter'] : '';
+$course_filter = (isset($_GET['course_filter']) && $_GET['course_filter'] !== '') ? (int)$_GET['course_filter'] : '';
 $status_filter = isset($_GET['status_filter']) ? trim($_GET['status_filter']) : '';
 $workload_filter = isset($_GET['workload_filter']) ? trim($_GET['workload_filter']) : '';
 $completion_filter = isset($_GET['completion_filter']) ? trim($_GET['completion_filter']) : '';
@@ -513,6 +1014,7 @@ $alert_filter = isset($_GET['alert_filter']) ? trim($_GET['alert_filter']) : '';
 
 $semesters = [];
 $classes_list = [];
+$courses_list = [];
 
 $semester_sql = "SELECT DISTINCT semester FROM classes";
 $semester_has_where = false;
@@ -625,6 +1127,82 @@ if ($class_filter !== '' && !empty($classes_list)) {
     $availableClassIds = array_column($classes_list, 'id');
     if (!in_array((int)$class_filter, $availableClassIds, true)) {
         $class_filter = '';
+    }
+}
+
+$course_sql = "
+    SELECT DISTINCT
+        s.id,
+        COALESCE(NULLIF(s.short_name, ''), s.subject_name) AS subject_display,
+        s.subject_name
+    FROM teacher_subject_assignments tsa
+    INNER JOIN subjects s ON s.id = tsa.subject_id
+    INNER JOIN classes c_course ON c_course.id = tsa.class_id
+    WHERE 1=1";
+$course_types = '';
+$course_params = [];
+if ($school_filter !== '') {
+    $course_school_clauses = [];
+    if ($class_has_school) {
+        $course_school_clauses[] = 'c_course.school = ?';
+        $course_types .= 's';
+        $course_params[] = $school_filter;
+    }
+    if ($class_has_department) {
+        if ($class_has_school) {
+            $course_school_clauses[] = "((c_course.school IS NULL OR c_course.school = '') AND c_course.department = ?)";
+        } else {
+            $course_school_clauses[] = 'c_course.department = ?';
+        }
+        $course_types .= 's';
+        $course_params[] = $school_filter;
+    }
+    if (!empty($course_school_clauses)) {
+        $course_sql .= ' AND (' . implode(' OR ', $course_school_clauses) . ')';
+    }
+}
+if ($semester_filter !== '') {
+    $course_sql .= ' AND c_course.semester = ?';
+    $course_types .= 's';
+    $course_params[] = (string)$semester_filter;
+}
+if ($class_filter !== '') {
+    $course_sql .= ' AND c_course.id = ?';
+    $course_types .= 'i';
+    $course_params[] = (int)$class_filter;
+}
+if ($activeTermId > 0) {
+    $course_sql .= ' AND (c_course.academic_term_id = ' . (int)$activeTermId . ' OR c_course.academic_term_id IS NULL)';
+}
+$course_sql .= ' ORDER BY subject_display';
+
+$course_stmt = mysqli_prepare($conn, $course_sql);
+if ($course_stmt) {
+    if ($course_types !== '') {
+        $courseBindValues = [$course_stmt, $course_types];
+        foreach ($course_params as $courseParamIndex => $courseParamValue) {
+            $courseBindValues[] = &$course_params[$courseParamIndex];
+        }
+        call_user_func_array('mysqli_stmt_bind_param', $courseBindValues);
+    }
+    mysqli_stmt_execute($course_stmt);
+    $course_result = mysqli_stmt_get_result($course_stmt);
+    if ($course_result) {
+        while ($course_row = mysqli_fetch_assoc($course_result)) {
+            $courses_list[] = [
+                'id' => (int)$course_row['id'],
+                'name' => normalize_elective_short_label($course_row['subject_display'] ?? $course_row['subject_name'] ?? '')
+            ];
+        }
+        mysqli_free_result($course_result);
+    }
+    mysqli_stmt_close($course_stmt);
+}
+
+if ($course_filter !== '' && !empty($courses_list)) {
+    $availableCourseIds = array_column($courses_list, 'id');
+    if (!in_array((int)$course_filter, $availableCourseIds, true)) {
+        $course_filter = '';
     }
 }
 
@@ -1314,7 +1892,7 @@ $chartDataJson = json_encode($chartData, JSON_NUMERIC_CHECK);
                 <label>Syllabus pace</label>
                 <select name="completion_filter">
                     <option value="" <?php echo $completion_filter === '' ? 'selected' : ''; ?>>All completion levels</option>
-                    <option value="ahead" <?php echo $completion_filter === 'ahead' ? 'selected' : ''; ?>>Ahead (≥85%)</option>
+                    <option value="ahead" <?php echo $completion_filter === 'ahead' ? 'selected' : ''; ?>>Ahead (G��85%)</option>
                     <option value="on_track" <?php echo $completion_filter === 'on_track' ? 'selected' : ''; ?>>On track (60-84%)</option>
                     <option value="behind" <?php echo $completion_filter === 'behind' ? 'selected' : ''; ?>>Behind (&lt;60%)</option>
                 </select>

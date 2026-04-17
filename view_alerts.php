@@ -49,8 +49,22 @@ $responded_alerts_result = mysqli_stmt_get_result($stmt_responded);
     <link rel="apple-touch-icon" href="nmimsvertical.jpg">
     <link rel="stylesheet" href="ica_tracker.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        .teacher-alerts-page .main-content .container > * + * {
+            margin-top: 16px;
+        }
+        .teacher-alerts-page .main-content .container > h2 {
+            margin-bottom: 2px;
+        }
+        .teacher-alerts-page .card h3 {
+            margin-bottom: 10px;
+        }
+        .teacher-alerts-page .card table {
+            margin-bottom: 0;
+        }
+    </style>
 </head>
-<body class="teacher-role">
+<body class="teacher-role teacher-alerts-page">
     <div class="dashboard">
         <div class="sidebar">
     <link rel="icon" type="image/png" href="nmimsvertical.jpg">
